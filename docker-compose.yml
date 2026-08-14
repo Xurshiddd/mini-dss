@@ -82,6 +82,17 @@ services:
       HEMIS_BASE_URL: ${HEMIS_BASE_URL:-}
       HEMIS_TOKEN: ${HEMIS_TOKEN:-}
 
+      # ⚠️ Rasm serveri ICHKI tarmoqda (hemis.ttyesi.uz -> 172.16.0.253).
+      # SSRF himoyasi xususiy IP'ni bloklaydi — bu ro'yxatsiz HAMMA rasm
+      # "manba URL ochilmadi" bilan rad etiladi.
+      PHOTO_ALLOWED_HOSTS: ${PHOTO_ALLOWED_HOSTS:-}
+
+      # ⚠️ Bu O'TKAZILISHI SHART edi — bo'lmasa .env dagi `false` e'tiborsiz
+      # qolib, kod standarti (`true`) ishlardi. Oqim ochiq turganda qurilma
+      # port 80'ga yangi ulanish QABUL QILMAYDI va terminal "o'chib qolgan"
+      # ko'rinadi. Batafsil: dahua/stream.go dagi ⛔ izoh.
+      MINIDSS_LIVE_EVENTS: ${MINIDSS_LIVE_EVENTS:-true}
+
     volumes:
       # ⚠️ Bu Laravel davridan qolgan volume — ichida 1140 ta rasm bor.
       # Yo'l o'zgardi (Laravel: storage/app/private/photos), lekin VOLUME

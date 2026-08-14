@@ -427,6 +427,17 @@ func (s *Store) UpdatePersonPhotoFromSource(ctx context.Context, personID int64,
 	if len(metrics) > 0 {
 		_ = json.Unmarshal(metrics, &merged)
 	}
+
+	// ⚠️ `Unmarshal` JSON `null` ni ko'rsa map'ni NIL qilib qo'yadi — yuqorida
+	// bo'sh map bergan bo'lsak ham. `null` esa oson tug'iladi: face-api javob
+	// bermasa chaqiruvchi `json.Marshal(nil)` yuboradi va u aynan "null" ()
+	// uzunligi 4, ya'ni `len(metrics) > 0` tekshiruvidan o'tib ketadi).
+	// Bunsiz keyingi qator "assignment to entry in nil map" bilan PANIC bo'ladi
+	// va butun rasm yuklash jarayoni qulaydi (bir marta shunday bo'lgan).
+	if merged == nil {
+		merged = map[string]any{}
+	}
+
 	merged["source_url"] = sourceURL
 	blob, _ := json.Marshal(merged)
 

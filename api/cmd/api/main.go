@@ -41,7 +41,7 @@ func main() {
 		log.Fatalf("auth xato: %v", err)
 	}
 
-	syncSvc := syncsvc.New(st, cfg.PhotoDir, authSvc.Decrypt, cfg.Timezone)
+	syncSvc := syncsvc.New(st, cfg.PhotoDir, authSvc.Decrypt, cfg.Timezone, cfg.PhotoAllowedHosts)
 	api := httpapi.New(cfg, st, authSvc, syncSvc)
 
 	srv := &http.Server{

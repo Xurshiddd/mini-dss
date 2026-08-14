@@ -45,6 +45,9 @@ type Service struct {
 	decrypt  func(string) (string, error)
 	tz       *time.Location
 
+	// Rasm olishga ruxsat etilgan ishonchli hostlar (SSRF allowlist).
+	photoHosts []string
+
 	mu       sync.Mutex
 	progress map[int64]*Progress
 	hemis    *HemisProgress
@@ -60,14 +63,15 @@ type Service struct {
 	listenersMu sync.Mutex
 }
 
-func New(st *store.Store, photoDir string, decrypt func(string) (string, error), tz *time.Location) *Service {
+func New(st *store.Store, photoDir string, decrypt func(string) (string, error), tz *time.Location, photoHosts []string) *Service {
 	return &Service{
-		store:    st,
-		photoDir: photoDir,
-		decrypt:  decrypt,
-		tz:        tz,
-		progress:  map[int64]*Progress{},
-		listeners: map[int64]*listener{},
+		store:      st,
+		photoDir:   photoDir,
+		decrypt:    decrypt,
+		photoHosts: photoHosts,
+		tz:         tz,
+		progress:   map[int64]*Progress{},
+		listeners:  map[int64]*listener{},
 	}
 }
 

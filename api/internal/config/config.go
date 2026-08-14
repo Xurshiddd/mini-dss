@@ -27,6 +27,14 @@ type Config struct {
 	HemisToken string
 	Timezone   *time.Location
 
+	// Rasm manbasi uchun ishonchli hostlar (vergul bilan).
+	//
+	// ⚠️ HEMIS rasm serveri ICHKI tarmoqda (hemis.ttyesi.uz -> 172.16.0.253).
+	// SSRF himoyasi xususiy IP'larni bloklaydi, shuning uchun bu host aniq
+	// ko'rsatilmasa HAMMA rasm "manba URL ochilmadi" bilan rad etiladi.
+	// Bo'sh qoldirilsa — faqat ochiq IP'lardan rasm olinadi.
+	PhotoAllowedHosts []string
+
 	// Qurilmalar uchun NTP serveri. ⚠️ NOM emas, IP — ichki DNS tashqi
 	// nomlarni o'ziga qaytaradi va sinxronizatsiya jimgina ishlamay qoladi.
 	// Standart: 216.239.35.0 (time.google.com, stratum-1).
@@ -59,6 +67,20 @@ func env(key, fallback string) string {
 	return fallback
 }
 
+// splitHosts — vergul bilan ajratilgan host ro'yxatini bo'ladi.
+// Bo'sh qismlar tashlanadi, host'lar kichik harfga keltiriladi.
+func splitHosts(raw string) []string {
+	var out []string
+
+	for _, part := range strings.Split(raw, ",") {
+		if h := strings.ToLower(strings.TrimSpace(part)); h != "" {
+			out = append(out, h)
+		}
+	}
+
+	return out
+}
+
 func Load() (Config, error) {
 	tzName := env("MINIDSS_TIMEZONE", "Asia/Tashkent")
 	tz, err := time.LoadLocation(tzName)
@@ -84,9 +106,11 @@ func Load() (Config, error) {
 		FaceAPI:       env("FACE_API_URL", "http://face-api:8000"),
 		HemisBase:     env("HEMIS_BASE_URL", ""),
 		HemisToken:    env("HEMIS_TOKEN", ""),
-		Timezone:      tz,
-		NTPAddress:    env("MINIDSS_NTP_ADDR", "216.239.35.0"),
-		LiveEvents:    env("MINIDSS_LIVE_EVENTS", "true") != "false",
+
+		PhotoAllowedHosts: splitHosts(env("PHOTO_ALLOWED_HOSTS", "")),
+		Timezone:          tz,
+		NTPAddress:        env("MINIDSS_NTP_ADDR", "216.239.35.0"),
+		LiveEvents:        env("MINIDSS_LIVE_EVENTS", "true") != "false",
 	}
 
 	if len(cfg.JWTSecret) < 16 {

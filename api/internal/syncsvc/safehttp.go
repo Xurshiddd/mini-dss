@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -17,8 +18,19 @@ import (
 // Himoya DIAL darajasida: DNS nomi resolve qilingandan KEYINGI haqiqiy IP
 // tekshiriladi. Bu DNS rebinding'ni ham to'xtatadi — nom ochiq IP'ga, keyin
 // lokal IP'ga o'zgarsa ham, ulanish paytidagi IP bloklanadi.
-func safeHTTPClient(timeout time.Duration) *http.Client {
+//
+// ⚠️ `allowedHosts` — ishonchli manba hostlari (masalan HEMIS rasm serveri).
+// Ular ICHKI tarmoqda turishi mumkin: hemis.ttyesi.uz -> 172.16.0.253. Bu
+// ro'yxatsiz xususiy IP bloki ularni ham kesadi va HAMMA rasm rad etiladi.
+// Ro'yxat audit tavsiyasiga mos (TASK-02 2b): ixtiyoriy `photo_url` baribir
+// bloklanadi, faqat aniq ko'rsatilgan host'gagina ruxsat beriladi.
+func safeHTTPClient(timeout time.Duration, allowedHosts []string) *http.Client {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
+
+	allowed := make(map[string]bool, len(allowedHosts))
+	for _, h := range allowedHosts {
+		allowed[strings.ToLower(h)] = true
+	}
 
 	return &http.Client{
 		Timeout: timeout,
@@ -42,9 +54,14 @@ func safeHTTPClient(timeout time.Duration) *http.Client {
 					return nil, err
 				}
 
-				for _, ip := range ips {
-					if isBlockedIP(ip.IP) {
-						return nil, fmt.Errorf("manzil bloklangan (ichki/lokal IP): %s", ip.IP)
+				// Ishonchli host — ichki IP tekshiruvidan o'tkazamiz.
+				// Redirect'da host o'zgarsa, bu dial qaytadan chaqiriladi
+				// va yangi host ro'yxatda bo'lmasa baribir bloklanadi.
+				if !allowed[strings.ToLower(host)] {
+					for _, ip := range ips {
+						if isBlockedIP(ip.IP) {
+							return nil, fmt.Errorf("manzil bloklangan (ichki/lokal IP): %s", ip.IP)
+						}
 					}
 				}
 

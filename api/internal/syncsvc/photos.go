@@ -116,7 +116,7 @@ func (s *Service) fetchPhotos(faceAPI string) {
 		go func() {
 			defer wg.Done()
 			// ⚠️ SSRF himoyasi: ichki/lokal IP'larga ulanishni rad etadi.
-			client := safeHTTPClient(60 * time.Second)
+			client := safeHTTPClient(60*time.Second, s.photoHosts)
 
 			for job := range jobs {
 				status, reason, metrics := s.fetchOne(ctx, client, faceAPI, job)
@@ -176,7 +176,16 @@ func (s *Service) fetchOne(ctx context.Context, client *http.Client,
 	if err != nil {
 		// ⚠️ Manbadagi URL ochilmasligi mumkin (masalan dev placeholder).
 		// Buni "rasm yomon" deb emas, "olib bo'lmadi" deb belgilaymiz.
-		return "rejected", "manba URL ochilmadi", nil
+		//
+		// ⚠️ Sababning MATNI ham saqlanadi: usiz DNS xatosi, timeout va SSRF
+		// bloki bazada bir xil "manba URL ochilmadi" bo'lib ko'rinadi va
+		// nosozlikni ajratib bo'lmaydi (bir marta shu chalkashlik bo'lgan).
+		reason := "manba URL ochilmadi"
+		if e, ok := err.(*url.Error); ok && e.Err != nil {
+			reason += ": " + e.Err.Error()
+		}
+
+		return "rejected", reason, nil
 	}
 	defer resp.Body.Close()
 
