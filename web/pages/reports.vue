@@ -11,7 +11,7 @@ type DayRow = {
 type Period = 'kunlik' | 'haftalik' | 'oylik'
 
 const period = ref<Period>('kunlik')
-const anchor = ref(new Date().toISOString().slice(0, 10))
+const anchor = ref(todayISO())
 const query = ref('')
 const rows = ref<DayRow[]>([])
 const loading = ref(false)
@@ -183,7 +183,7 @@ watch([period, anchor], load)
 let timer: ReturnType<typeof setInterval> | null = null
 
 const showsToday = computed(() => {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayISO()
   return range.value.from <= today && today <= range.value.to
 })
 
@@ -222,7 +222,14 @@ onUnmounted(() => {
 
         <div class="row" style="gap: 4px">
           <button class="sm" @click="shift(-1)">‹ Oldingi</button>
-          <button class="sm" @click="shift(1)">Keyingi ›</button>
+          <!--
+            ⚠️ `showsToday` — oraliq bugungi kunni QAMRAB olganmi. Shart
+            `anchor` bilan tekshirilmaydi: oylik rejimda anchor 01-avgust,
+            bugun 14-avgust bo'lsa ham oraliq bugunni o'z ichiga oladi va
+            "Keyingi" kelajakka olib ketardi.
+          -->
+          <button class="sm" :disabled="showsToday" @click="anchor = todayISO()">Bugun</button>
+          <button class="sm" :disabled="showsToday" @click="shift(1)">Keyingi ›</button>
         </div>
 
         <div style="min-width: 200px; flex: 1">

@@ -27,7 +27,7 @@ type Event = {
   happened_at: string; direction: string; device_name: string; location: string | null
 }
 
-const day = ref(new Date().toISOString().slice(0, 10))
+const day = ref(todayISO())
 const person = ref<Person | null>(null)
 const days = ref<DayRow[]>([])
 const events = ref<Event[]>([])

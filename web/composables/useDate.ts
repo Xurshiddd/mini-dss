@@ -11,6 +11,22 @@
 const ISO = /^(\d{4})-(\d{2})-(\d{2})/
 const UZ = /^(\d{1,2})[./](\d{1,2})[./](\d{4})$/
 
+/**
+ * Bugungi kun ISO ko'rinishida — LOKAL vaqt bo'yicha.
+ *
+ * ⚠️ `new Date().toISOString().slice(0, 10)` ISHLATILMAYDI: u sanani UTC ga
+ * o'giradi. Toshkent UTC+5 bo'lgani uchun kechasi 00:00 dan 05:00 gacha u
+ * KECHAGI kunni qaytaradi va hisobot bexosdan bir kun orqada ochiladi.
+ */
+export function todayISO(): string {
+  const d = new Date()
+  return [
+    d.getFullYear(),
+    String(d.getMonth() + 1).padStart(2, '0'),
+    String(d.getDate()).padStart(2, '0'),
+  ].join('-')
+}
+
 /** ISO yoki Date → "14/05/2001" */
 export function toUz(value: string | Date | null | undefined): string {
   if (!value) return ''
