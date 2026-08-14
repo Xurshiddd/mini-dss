@@ -13,6 +13,16 @@ raw/05-records.txt
 raw/05b-statefind.txt
 raw/06-events.bin
 
+# ⚠️ Yozuv sinovlarining chiqishi ham qurilmadan REAL yozuvlarni qaytaradi
+# (`CardName=` real ism, `UserID=` real hujjat raqami). Fayl nomida sana
+# bo'lgani uchun yuqoridagi aniq nomlar bilan qamralmagan edi — 4 ta fayl
+# ochiq qolgan. Shablon bilan yopamiz.
+raw/**/write-test-*.txt
+raw/**/write-variants-*.txt
+raw/write-test-*.txt
+raw/write-variants-*.txt
+raw/write-test-cleanup.txt
+
 # Qurilmadan yuklab olingan web UI bundle (katta, kerak emas)
 raw/08-app.js
 raw/08-webui-index.html
