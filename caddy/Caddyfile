@@ -1,0 +1,36 @@
+# Mini-DSS reverse proxy — ichki TLS bilan.
+#
+# ⚠️ `tls internal` — Caddy o'zining ichki CA'sidan self-signed sertifikat
+# beradi (Let's Encrypt EMAS, chunki tizim ichki tarmoqda, domen yo'q).
+# Brauzer birinchi kirishda ogohlantiradi — bu ichki tizim uchun kutilgan.
+#
+# ⚠️ Hostlar ANIQ ko'rsatilishi SHART: `tls internal` sertifikatni shu
+# nomlar uchun beradi. Server IP o'zgarsa — bu yerga qo'shing.
+#
+# Barcha manzil bitta origin ortida: `/api/*` API'ga, qolgani web'ga.
+# Shu sababli brauzer so'rovlari same-origin — CORS muammosi yo'qoladi.
+# HTTP -> HTTPS yo'naltirishni Caddy o'zi avtomatik qiladi.
+
+{
+	# Ichki CA (ACME/Let's Encrypt emas — domen yo'q).
+	local_certs
+}
+
+localhost, 172.16.240.70 {
+	tls internal
+
+	# API — legacy CGI kabi uzun so'rovlar bo'lishi mumkin (rasm yuklash).
+	handle /api/* {
+		reverse_proxy api:8000 {
+			# ⚠️ X-Forwarded-For'ni HARD o'rnatamiz (append emas): client
+			# soxta XFF yuborsa ham u almashtiriladi. Shu sababli API'dagi
+			# RealIP va login rate-limit haqiqiy client IP'ni ko'radi.
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
+
+	# Qolgan hamma narsa — Nuxt SPA.
+	handle {
+		reverse_proxy web:3000
+	}
+}

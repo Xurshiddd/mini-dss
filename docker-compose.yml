@@ -1,0 +1,178 @@
+# Mini-DSS — hamma narsa alohida.
+# Hamma narsa mustaqil — boshqa loyihalar bilan umumiy konteyner yoki port yo'q.
+#
+#   cp .env.example .env
+#   docker compose up -d --build
+#   -> http://localhost:6080
+#
+# ⚠️ Port 6000 ISHLATILMAYDI — Chrome uni bloklaydi (ERR_UNSAFE_PORT).
+
+name: mini-dss
+
+services:
+  # HTTPS reverse proxy (ichki TLS). Yagona tashqi kirish nuqtasi.
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "${HTTPS_PORT:-6443}:443"
+      - "${HTTP_PORT:-6080}:80"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Ichki CA va sertifikatlar shu yerda saqlanadi — o'chsa brauzer
+      # yangi sertifikatni qayta so'raydi, shuning uchun barqaror volume.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+      - api
+    mem_limit: 256m
+    restart: unless-stopped
+
+  # Nuxt admin panel
+  web:
+    build:
+      context: ./web
+      args:
+        # ⚠️ Bo'sh — brauzer API'ga NISBIY yo'l bilan boradi (/api/...),
+        # ya'ni joriy origin (Caddy) orqali. Shu sababli IP/domen bu yerga
+        # qadalmaydi va so'rovlar same-origin bo'ladi (CORS muammosi yo'q).
+        NUXT_PUBLIC_API_BASE: ""
+    # Port YO'Q — faqat Caddy orqali kiriladi.
+    expose:
+      - "3000"
+    depends_on:
+      - api
+    mem_limit: 512m
+    restart: unless-stopped
+
+  # Go API
+  api:
+    build: ./api
+    # ⚠️ Port faqat LOKAL — tashqaridan Caddy orqali kiriladi. 127.0.0.1
+    # debug/tekshirish uchun qoldirilgan.
+    ports:
+      - "127.0.0.1:${API_PORT:-6081}:8000"
+    environment:
+      PORT: "8000"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: ${DB_DATABASE:-minidss}
+      # ⚠️ Ilova NOSUPERUSER rol bilan ulanadi (minidss_app). Superuser
+      # minidss faqat migratsiya/admin uchun — u COPY FROM PROGRAM orqali
+      # RCE'ga imkon beradi, shuning uchun ilova uni ISHLATMAYDI.
+      DB_USERNAME: ${DB_USERNAME:-minidss_app}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD .env da berilishi shart}
+
+      # ⛔ ENCRYPTION_KEY o'zgarsa saqlangan qurilma parollari o'qilmay qoladi.
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY .env da berilishi shart}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET .env da berilishi shart}
+      JWT_TTL_MINUTES: ${JWT_TTL_MINUTES:-720}
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+
+      PHOTO_DIR: /data/photos
+      FACE_API_URL: http://face-api:8000
+      MINIDSS_TIMEZONE: ${MINIDSS_TIMEZONE:-Asia/Tashkent}
+
+      # ⚠️ NOM emas, IP. Standart — shu serverning o'zi (`ntp` xizmati),
+      # chunki qurilmalar tarmog'idan tashqi NTP'ga chiqib bo'lmaydi.
+      MINIDSS_NTP_ADDR: ${MINIDSS_NTP_ADDR:-172.16.240.70}
+
+      # HEMIS → platforma sync uchun
+      HEMIS_BASE_URL: ${HEMIS_BASE_URL:-}
+      HEMIS_TOKEN: ${HEMIS_TOKEN:-}
+
+    volumes:
+      # ⚠️ Bu Laravel davridan qolgan volume — ichida 1140 ta rasm bor.
+      # Yo'l o'zgardi (Laravel: storage/app/private/photos), lekin VOLUME
+      # O'SHA — nomini o'zgartirmang, aks holda rasmlar yo'qoladi.
+      - storage-photos:/data/photos
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 512m
+    restart: unless-stopped
+
+  # Foto validatsiya (InsightFace)
+  face-api:
+    build: ./face-api
+    # ⚠️ Port faqat LOKALGA — API compose tarmog'i orqali (face-api:8000)
+    # boradi, tashqi kerak emas. Ilgari 0.0.0.0 da ochiq va AUTHSIZ edi:
+    # istalgan kishi og'ir InsightFace so'rovlari bilan DoS qila olardi.
+    # 127.0.0.1 faqat lokal debug (/docs) uchun qoldirildi.
+    ports:
+      - "127.0.0.1:${FACE_API_PORT:-6001}:8000"
+    volumes:
+      # ⚠️ Kod bind mount EMAS — image ichida (Dockerfile COPY). Bind mount
+      # konteyner buzilsa host fayllariga yozish yo'lini ochardi.
+      # Non-root bo'lgani uchun modellar /home/app/.insightface da.
+      - face-models:/home/app/.insightface
+    environment:
+      # Terminal talablari (device-probe/DEVICE-REPORT.md 8.3-band)
+      MIN_EYE_DISTANCE: 60
+      MIN_QUALITY: 50
+    # InsightFace CPU'ni og'ir yuklaydi — hostni to'liq yeb qo'ymasin.
+    mem_limit: 2g
+    cpus: 2.0
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    # ⚠️ Port faqat LOKALGA bog'langan (127.0.0.1). Ilgari 0.0.0.0 edi va
+    # butun 172.16.x tarmog'idan standart parol bilan ulanib bo'lardi.
+    # Ilova baribir compose tarmog'i orqali (postgres:5432) boradi — bu port
+    # faqat qo'lda migratsiya/tekshirish uchun.
+    ports:
+      - "127.0.0.1:${DB_PORT_HOST:-6432}:5432"
+    environment:
+      # ⚠️ Bootstrap SUPERUSER — Postgres uni NOSUPERUSER qilishga ruxsat
+      # bermaydi. Shuning uchun ilova alohida minidss_app roli bilan ulanadi.
+      POSTGRES_DB: ${DB_DATABASE:-minidss}
+      POSTGRES_USER: minidss
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?DB_ADMIN_PASSWORD .env da berilishi shart}
+      # initdb skripti ilova roliga shu parolni beradi (faqat bo'sh volume'da).
+      APP_DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD .env da berilishi shart}
+    volumes:
+      # ⚠️ Ichida 10 509 odam va sync holatlari bor. Tegilmaydi.
+      - pgdata:/var/lib/postgresql/data
+      # Bo'sh volume'da ishga tushadigan init skriptlar (rol yaratish).
+      - ./api/initdb:/docker-entrypoint-initdb.d:ro
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U minidss -d ${DB_DATABASE:-minidss}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # NTP server — terminallarning soatini to'g'rilab turadi.
+  #
+  # ⚠️ Nega kerak: terminallar tarmog'idan (192.168.30.x) tashqi NTP'ga
+  # UDP/123 chiqmaydi, ichki DNS esa tashqi nomlarni o'ziga qaytaradi
+  # (pool.ntp.org -> 172.16.0.254, u NTP tarqatmaydi). Qurilmaning o'z
+  # `setCurrentTime` chaqiruvi faqat TIZIM soatini qo'yadi — apparat soati
+  # (RTC) o'zgarmaydi va qurilma bir necha daqiqadan keyin undan tiklaydi,
+  # farq qaytadi (o'lchangan: 13 daqiqada 1s -> 49s).
+  #
+  # Shuning uchun NTP shu yerda turadi va qurilmalar SHU serverga
+  # yo'naltiriladi (MINIDSS_NTP_ADDR). Tashqi firewall'ga bog'liq emas.
+  ntp:
+    # ⚠️ Digest bilan qadalgan — `latest` istalgan paytda o'zgarardi va
+    # kutilmagan xatti-harakat kiritishi mumkin edi. Yangilash uchun yangi
+    # digest'ni ataylab qo'ying.
+    image: cturra/ntp@sha256:7224d4e7c7833aabbcb7dd70c46c8a8dcccda365314c6db047b9b10403ace3bc
+    ports:
+      - "123:123/udp"
+    mem_limit: 128m
+    environment:
+      # Yuqoriga o'zi ham aniq manbadan sinxronlanadi.
+      NTP_SERVERS: "216.239.35.0,216.239.35.4,162.159.200.1"
+      LOG_LEVEL: "0"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  face-models:
+  storage-photos:
+  caddy-data:
+  caddy-config:

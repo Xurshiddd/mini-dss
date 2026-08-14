@@ -1,0 +1,36 @@
+===== /cgi-bin/magicBox.cgi?action=getDeviceType =====
+type=DHI-ASI7213Y-V3
+
+[HTTP 200]
+
+===== /cgi-bin/magicBox.cgi?action=getSoftwareVersion =====
+version=1.000.0000014.0.R,build:2021-08-23
+
+[HTTP 200]
+
+===== /cgi-bin/magicBox.cgi?action=getHardwareVersion =====
+version=1.00
+
+[HTTP 200]
+
+===== /cgi-bin/magicBox.cgi?action=getSystemInfo =====
+appAutoStart=true
+deviceType=DHI-ASI7213Y-V3
+hardwareVersion=1.00
+processor=HI3516DV300
+serialNumber=7J0A8D6PAJ7315A
+updateSerial=ASI7213Y-V3
+updateSerialCloudUpgrade=ASI7213Y-V3:01:04:05:98:36:00:02:10:01:01:04:384_384:00:00:00:06:00:01:00:00:800:FF
+
+[HTTP 200]
+
+===== /cgi-bin/magicBox.cgi?action=getSerialNo =====
+sn=7J0A8D6PAJ7315A
+
+[HTTP 200]
+
+===== /cgi-bin/magicBox.cgi?action=getVendor =====
+vendor=Dahua
+
+[HTTP 200]
+

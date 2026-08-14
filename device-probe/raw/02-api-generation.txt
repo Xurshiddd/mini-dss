@@ -1,0 +1,80 @@
+===== /cgi-bin/AccessUser.cgi?action=count =====
+Error
+Bad Request!
+
+[HTTP 400]
+
+===== /cgi-bin/AccessFace.cgi?action=count =====
+Error
+Bad Request!
+
+[HTTP 400]
+
+===== /cgi-bin/AccessCard.cgi?action=count =====
+Error
+Bad Request!
+
+[HTTP 400]
+
+===== /cgi-bin/AccessUser.cgi?action=list&count=1 =====
+Error
+Bad Request!
+
+[HTTP 400]
+
+===== /cgi-bin/recordFinder.cgi?action=getQuerySize&name=AccessControlCard =====
+Size=9801
+count=9801
+
+[HTTP 200]
+
+===== /cgi-bin/recordFinder.cgi?action=getQuerySize&name=AccessControlCardRec =====
+Size=100000
+count=100000
+
+[HTTP 200]
+
+===== /cgi-bin/recordFinder.cgi?action=getQuerySize&name=FaceRecognition =====
+Error
+Bad Request!
+
+[HTTP 400]
+
+===== /cgi-bin/FaceInfoManager.cgi?action=getCaps =====
+Error
+Bad Request!
+
+[HTTP 400]
+
+===== /cgi-bin/recordUpdater.cgi?action=getCaps =====
+Error
+Bad Request!
+
+[HTTP 400]
+
+
+########## KONTROL TEST: mavjud bo'lmagan CGI vs noto'g'ri action ##########
+===== /cgi-bin/zzzNotExist.cgi?action=count =====
+Error
+Bad Request!
+
+[HTTP 400]
+
+===== /cgi-bin/magicBox.cgi?action=zzzNotAnAction =====
+Error
+Bad Request!
+
+[HTTP 400]
+
+===== /cgi-bin/AccessUser.cgi =====
+Error
+Bad Request!
+
+[HTTP 400]
+
+===== /cgi-bin/AccessControl.cgi?action=getCaps =====
+Error
+Bad Request!
+
+[HTTP 400]
+

@@ -1,0 +1,18 @@
+# Parol
+.env
+
+# Shaxsiy ma'lumot: real ismlar, UserID'lar, yuz fotolari.
+# Bular hech qachon commit qilinmasin.
+raw/**/03b-fullconfig.txt
+raw/**/04-users-sample.txt
+raw/**/05-records.txt
+raw/**/06-events.bin
+raw/03b-fullconfig.txt
+raw/04-users-sample.txt
+raw/05-records.txt
+raw/05b-statefind.txt
+raw/06-events.bin
+
+# Qurilmadan yuklab olingan web UI bundle (katta, kerak emas)
+raw/08-app.js
+raw/08-webui-index.html

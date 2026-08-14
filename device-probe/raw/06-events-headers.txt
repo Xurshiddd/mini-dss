@@ -1,0 +1,18 @@
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Digest realm="Login to 8eabde39176e4c7057c83d1b3790c67a", qop="auth", nonce="308882075", opaque="a9a3019fd6cad12fc7b3a6013ba48a0588126f6a"
+Connection: close
+Set-Cookie:secure; HttpOnly
+CONTENT-LENGTH: 0
+
+HTTP/1.1 200 OK
+X-XSS-Protection: 1;mode=block
+X-Frame-Options: SAMEORIGIN
+Content-Security-Policy: script-src 'self' 'unsafe-inline' 'unsafe-eval'
+Strict-Transport-Security: max-age=604800; includeSubDomains
+Cache-Control: no-cache
+Pragma: no-cache
+Expires: Thu, 01 Dec 1994 16:00:00 GMT
+Connection: close
+Set-Cookie:secure; HttpOnly
+Content-Type: multipart/x-mixed-replace; boundary=myboundary
+

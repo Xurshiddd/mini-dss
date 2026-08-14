@@ -1,0 +1,36 @@
+===== /cgi-bin/AccessUser.cgi?action=count =====
+Error
+Bad Request!
+
+[HTTP 400]
+
+===== /cgi-bin/AccessFace.cgi?action=count =====
+Error
+Bad Request!
+
+[HTTP 400]
+
+===== /cgi-bin/AccessCard.cgi?action=count =====
+Error
+Bad Request!
+
+[HTTP 400]
+
+===== /cgi-bin/recordFinder.cgi?action=getQuerySize&name=AccessControlCard =====
+Size=9801
+count=9801
+
+[HTTP 200]
+
+===== /cgi-bin/recordFinder.cgi?action=getQuerySize&name=AccessControlCardRec =====
+Size=100000
+count=100000
+
+[HTTP 200]
+
+===== /cgi-bin/zzzNotExist.cgi?action=count =====
+Error
+Bad Request!
+
+[HTTP 400]
+
