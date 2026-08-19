@@ -15,7 +15,24 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-→ **http://localhost:6080** · `admin` / `admin123`
+⚠️ **Bo'sh bazada migratsiyalar avtomatik qo'llanmaydi** — `api` birinchi
+marta "relation ... does not exist" xatosi bilan ishga tushadi. Faqat yangi
+(bo'sh) `postgres` volume'da, bir marta kerak:
+
+```bash
+for f in api/migrations/*.sql; do
+  docker compose exec -T postgres psql -U minidss -d minidss -v ON_ERROR_STOP=1 < "$f"
+done
+docker compose restart api
+```
+
+→ **https://localhost:6443** · `admin` / `admin123`
+
+⚠️ **Faqat HTTPS.** `http://localhost:6080` ochilsa Caddy `https://localhost/`
+ga (portsiz) qayta yo'naltiradi — bu docker-compose'da chiqarilmagan (faqat
+`6443:443` bor), shuning uchun brauzer ulana olmaydi. To'g'ridan-to'g'ri
+`https://localhost:6443` oching. Sertifikat ichki CA'dan (Let's Encrypt
+emas) — brauzer ogohlantiradi, "Advanced → Proceed" bosing.
 
 ## Tuzilma
 
