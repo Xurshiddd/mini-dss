@@ -29,6 +29,11 @@ func New(base, token string) *Client {
 	}
 }
 
+const (
+	employeePath = "/rest/v1/data/employee-list"
+	studentPath  = "/rest/v1/data/student-list"
+)
+
 // ---------------------------------------------------------------- javob shakli
 
 type ref struct {
@@ -117,13 +122,21 @@ type Student struct {
 	EducationType ref `json:"educationType"`
 	PaymentForm   ref `json:"paymentForm"`
 	StudentStatus ref `json:"studentStatus"`
+
+	// Turar joy turi (h_accommodation): 15 = talabalar turar joyi.
+	Accommodation ref `json:"accommodation"`
 }
 
 type envelope[T any] struct {
 	Success bool `json:"success"`
 	Error   any  `json:"error"`
 	Data    struct {
-		Items []T `json:"items"`
+		Items      []T `json:"items"`
+		Pagination struct {
+			TotalCount int `json:"totalCount"`
+			PageCount  int `json:"pageCount"`
+			Page       int `json:"page"`
+		} `json:"pagination"`
 	} `json:"data"`
 }
 
@@ -167,16 +180,67 @@ func (c *Client) fetch(ctx context.Context, path string, page, limit int,
 // shunda rad etilganlar sanaladi va logda ko'rinadi.
 func (c *Client) EachEmployee(ctx context.Context, fn func(Employee) error) error {
 	// `type=all` bo'lmasa HEMIS faqat bir qismini qaytaradi.
-	return paginate(ctx, c, "/rest/v1/data/employee-list",
-		map[string]string{"type": "all"}, fn)
+	return paginate(ctx, c, employeePath, map[string]string{"type": "all"}, fn)
 }
 
 // Ishdan bo'shatilgan xodim holati kodi.
 // Bunday xodim terminalga yozilmaydi va bazada bo'lsa faolsizlantiriladi.
 const EmployeeStatusDismissed = "14"
 
-func (c *Client) EachStudent(ctx context.Context, fn func(Student) error) error {
-	return paginate(ctx, c, "/rest/v1/data/student-list", nil, fn)
+// EachStudent — filtrga tushgan talabalarni sahifalab qaytaradi.
+//
+// Filtr bo'sh bo'lsa HEMIS o'z standartini qo'llaydi: `studentStatus = 11`
+// (O'qimoqda). Barcha holatlar kerak bo'lsa `StudentStatus: "-1"`.
+func (c *Client) EachStudent(ctx context.Context, f StudentFilter, fn func(Student) error) error {
+	return paginate(ctx, c, studentPath, f.values(), func(s Student) error {
+		// So'rovda bajarilmagan filtrlar (masalan to'lov shakli) shu yerda.
+		if !f.Match(s) {
+			return nil
+		}
+		return fn(s)
+	})
+}
+
+// CountStudents — filtrga tushadigan talabalar soni (bitta yengil so'rov).
+//
+// HEMIS `pagination.totalCount` beradi — butun ro'yxatni tortmasdan
+// "nechta topildi" ni bilish uchun shu yagona yo'l.
+//
+// ⚠️ Mahalliy filtrlar (to'lov shakli) BU YERDA hisobga olinmaydi: son
+// so'rov filtri bo'yicha, ya'ni haqiqiy natijadan katta bo'lishi mumkin.
+func (c *Client) CountStudents(ctx context.Context, f StudentFilter) (int, error) {
+	return c.count(ctx, studentPath, f.values())
+}
+
+// CountStudentsExact — mahalliy saralanadigan filtrlarni ham hisobga olib
+// sanaydi.
+//
+// ⚠️ Butun ro'yxatni tortadi (7120 talaba ≈ 36 ta so'rov, ~15 s), chunki
+// turar joy va to'lov shakli HEMIS so'rovida yo'q. Shuning uchun bu faqat
+// ATAYLAB chaqiriladi — jonli ko'rsatkich `CountStudents` bilan.
+func (c *Client) CountStudentsExact(ctx context.Context, f StudentFilter) (int, error) {
+	n := 0
+	err := c.EachStudent(ctx, f, func(Student) error {
+		n++
+		return nil
+	})
+	return n, err
+}
+
+// CountEmployees — xodimlar soni.
+func (c *Client) CountEmployees(ctx context.Context) (int, error) {
+	return c.count(ctx, employeePath, map[string]string{"type": "all"})
+}
+
+func (c *Client) count(ctx context.Context, path string, extra map[string]string) (int, error) {
+	var env envelope[json.RawMessage]
+	if err := c.fetch(ctx, path, 1, 1, extra, &env); err != nil {
+		return 0, err
+	}
+	if !env.Success {
+		return 0, fmt.Errorf("HEMIS xato javob berdi (%s): %v", path, env.Error)
+	}
+	return env.Data.Pagination.TotalCount, nil
 }
 
 func paginate[T any](ctx context.Context, c *Client, path string,

@@ -294,23 +294,6 @@ func (a *API) markDeleted(w http.ResponseWriter, r *http.Request, ids []int64) {
 	})
 }
 
-// --------------------------------------------------------------- HEMIS sync
-
-func (a *API) startHemisSync(w http.ResponseWriter, r *http.Request) {
-	if err := a.sync.StartHemisSync(a.cfg.HemisBase, a.cfg.HemisToken); err != nil {
-		fail(w, http.StatusConflict, err.Error())
-		return
-	}
-	write(w, http.StatusAccepted, a.sync.HemisProgress())
-}
-
-func (a *API) hemisProgress(w http.ResponseWriter, r *http.Request) {
-	write(w, http.StatusOK, map[string]any{
-		"progress":   a.sync.HemisProgress(),
-		"configured": a.cfg.HemisBase != "" && a.cfg.HemisToken != "",
-	})
-}
-
 func (a *API) startPhotoFetch(w http.ResponseWriter, r *http.Request) {
 	if err := a.sync.StartPhotoFetch(a.cfg.FaceAPI); err != nil {
 		fail(w, http.StatusConflict, err.Error())
@@ -374,6 +357,8 @@ func (a *API) directoryRoutes(r chi.Router) {
 
 	r.Post("/api/sync/hemis", a.startHemisSync)
 	r.Get("/api/sync/hemis", a.hemisProgress)
+	r.Get("/api/hemis/filters", a.hemisFilters)
+	r.Post("/api/hemis/student-count", a.hemisStudentCount)
 	r.Post("/api/sync/photos", a.startPhotoFetch)
 	r.Get("/api/sync/photos", a.photoProgress)
 	r.Post("/api/sync/devices", a.syncAll)

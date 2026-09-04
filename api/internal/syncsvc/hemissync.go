@@ -19,10 +19,21 @@ import (
 // oqim. Sync ularni bekor qilib yuborsa, tekshiruvdan o'tgan rasmlar
 // yo'qoladi.
 
+// HemisOptions — sync nimani va qanday filtr bilan tortishini belgilaydi.
+//
+// Filtrlar faqat TALABAGA tegishli: HEMIS `employee-list` da bunday
+// parametrlar yo'q.
+type HemisOptions struct {
+	Employees bool                `json:"employees"`
+	Students  bool                `json:"students"`
+	Filter    hemis.StudentFilter `json:"filter"`
+}
+
 type HemisProgress struct {
 	Running   bool       `json:"running"`
 	Stage     string     `json:"stage"` // 'employees' | 'students'
 	Total     int        `json:"total"`
+	Expected  int        `json:"expected"` // HEMIS aytgan son (progress bar uchun)
 	Created   int        `json:"created"`
 	Updated   int        `json:"updated"`
 	Skipped   int        `json:"skipped"`
@@ -30,6 +41,9 @@ type HemisProgress struct {
 	Error     string     `json:"error,omitempty"`
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
+
+	// Qaysi tanlov bilan ketgani — panelda ko'rinsin.
+	Options HemisOptions `json:"options"`
 }
 
 func (s *Service) HemisProgress() *HemisProgress {
@@ -43,9 +57,20 @@ func (s *Service) HemisProgress() *HemisProgress {
 	return &copied
 }
 
-func (s *Service) StartHemisSync(base, token string) error {
+func (s *Service) StartHemisSync(base, token string, opts HemisOptions) error {
 	if base == "" || token == "" {
 		return fmt.Errorf("HEMIS manzili yoki tokeni sozlanmagan (HEMIS_BASE_URL, HEMIS_TOKEN)")
+	}
+	if !opts.Employees && !opts.Students {
+		return fmt.Errorf("na xodim, na talaba tanlanmagan — tortadigan narsa yo'q")
+	}
+	if err := opts.Filter.Validate(); err != nil {
+		return err
+	}
+
+	stage := "employees"
+	if !opts.Employees {
+		stage = "students"
 	}
 
 	s.mu.Lock()
@@ -53,10 +78,12 @@ func (s *Service) StartHemisSync(base, token string) error {
 		s.mu.Unlock()
 		return fmt.Errorf("HEMIS sync allaqachon ketyapti")
 	}
-	s.hemis = &HemisProgress{Running: true, StartedAt: time.Now(), Stage: "employees"}
+	s.hemis = &HemisProgress{
+		Running: true, StartedAt: time.Now(), Stage: stage, Options: opts,
+	}
 	s.mu.Unlock()
 
-	go s.runHemis(base, token)
+	go s.runHemis(base, token, opts)
 	return nil
 }
 
@@ -68,7 +95,7 @@ func (s *Service) updateHemis(fn func(*HemisProgress)) {
 	}
 }
 
-func (s *Service) runHemis(base, token string) {
+func (s *Service) runHemis(base, token string, opts HemisOptions) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Hour)
 	defer cancel()
 
@@ -102,70 +129,95 @@ func (s *Service) runHemis(base, token string) {
 		})
 	}
 
+	// Nechta yozuv kutilayotganini oldindan so'raymiz — progress bar shunga
+	// tayanadi. Xato bo'lsa ham to'xtamaymiz: son bo'lmasa bar ko'rsatilmaydi.
+	expected := 0
+	if opts.Employees {
+		if n, cErr := client.CountEmployees(ctx); cErr == nil {
+			expected += n
+		}
+	}
+	if opts.Students {
+		if n, cErr := client.CountStudents(ctx, opts.Filter); cErr == nil {
+			expected += n
+		}
+	}
+	s.updateHemis(func(p *HemisProgress) { p.Expected = expected })
+
 	// --- Xodimlar ---
-	err := client.EachEmployee(ctx, func(e hemis.Employee) error {
-		total++
+	var err error
 
-		if e.IDNumber == "" {
-			skipped++ // ID'siz odamni terminalga yuborib bo'lmaydi
-			return nil
-		}
+	if opts.Employees {
+		err = client.EachEmployee(ctx, func(e hemis.Employee) error {
+			total++
 
-		// ⚠️ Ishdan bo'shatilgan (employeeStatus.code = 14) va faol bo'lmagan
-		// xodimlar QABUL QILINMAYDI.
-		//
-		// Shunchaki "o'tkazib yuborish" yetarli emas: odam ilgari bazaga
-		// tushgan bo'lsa, faol holda qolaverardi va terminalda eshik
-		// ochaverardi. Shuning uchun mavjudini faolsizlantiramiz.
-		if e.Status.Code == hemis.EmployeeStatusDismissed || !e.Active {
-			skipped++
-			if n, err := s.store.DeactivateByUserID(ctx, e.IDNumber); err == nil && n > 0 {
-				deactivated++
+			if e.IDNumber == "" {
+				skipped++ // ID'siz odamni terminalga yuborib bo'lmaydi
+				return nil
 			}
+
+			// ⚠️ Ishdan bo'shatilgan (employeeStatus.code = 14) va faol bo'lmagan
+			// xodimlar QABUL QILINMAYDI.
+			//
+			// Shunchaki "o'tkazib yuborish" yetarli emas: odam ilgari bazaga
+			// tushgan bo'lsa, faol holda qolaverardi va terminalda eshik
+			// ochaverardi. Shuning uchun mavjudini faolsizlantiramiz.
+			if e.Status.Code == hemis.EmployeeStatusDismissed || !e.Active {
+				skipped++
+				if n, err := s.store.DeactivateByUserID(ctx, e.IDNumber); err == nil && n > 0 {
+					deactivated++
+				}
+				return nil
+			}
+
+			depID := s.saveDepartment(ctx, e.Department)
+
+			_, isNew, err := s.store.UpsertPerson(ctx, store.PersonInput{
+				ExternalID:    strPtr(fmt.Sprint(e.ID)),
+				Source:        "hemis_employee",
+				PersonType:    "employee",
+				UserID:        e.IDNumber,
+				FullName:      e.FullName,
+				Gender:        strPtr(e.Gender.Name),
+				BirthDate:     hemis.BirthDate(e.BirthDate),
+				DepartmentID:  depID,
+				Status:        strPtr(e.Status.Name),
+				StaffPosition: strPtr(e.StaffPos.Name),
+				PhotoURL:      e.Image,
+				IsActive:      e.Active,
+			})
+			if err != nil {
+				failed++
+				return nil // bitta yozuv butun sync'ni to'xtatmasin
+			}
+
+			if isNew {
+				created++
+			} else {
+				updated++
+			}
+
+			s.updateHemis(func(p *HemisProgress) {
+				p.Total, p.Created, p.Updated, p.Skipped, p.Failed = total, created, updated, skipped, failed
+			})
 			return nil
-		}
-
-		depID := s.saveDepartment(ctx, e.Department)
-
-		_, isNew, err := s.store.UpsertPerson(ctx, store.PersonInput{
-			ExternalID:    strPtr(fmt.Sprint(e.ID)),
-			Source:        "hemis_employee",
-			PersonType:    "employee",
-			UserID:        e.IDNumber,
-			FullName:      e.FullName,
-			Gender:        strPtr(e.Gender.Name),
-			BirthDate:     hemis.BirthDate(e.BirthDate),
-			DepartmentID:  depID,
-			Status:        strPtr(e.Status.Name),
-			StaffPosition: strPtr(e.StaffPos.Name),
-			PhotoURL:      e.Image,
-			IsActive:      e.Active,
 		})
-		if err != nil {
-			failed++
-			return nil // bitta yozuv butun sync'ni to'xtatmasin
-		}
+	}
 
-		if isNew {
-			created++
-		} else {
-			updated++
-		}
-
-		s.updateHemis(func(p *HemisProgress) {
-			p.Total, p.Created, p.Updated, p.Skipped, p.Failed = total, created, updated, skipped, failed
-		})
-		return nil
-	})
 	if err != nil {
 		finish(err)
 		return
 	}
 
 	// --- Talabalar ---
+	if !opts.Students {
+		finish(nil)
+		return
+	}
+
 	s.updateHemis(func(p *HemisProgress) { p.Stage = "students" })
 
-	err = client.EachStudent(ctx, func(st hemis.Student) error {
+	err = client.EachStudent(ctx, opts.Filter, func(st hemis.Student) error {
 		total++
 
 		if st.IDNumber == "" {

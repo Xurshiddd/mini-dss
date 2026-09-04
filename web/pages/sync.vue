@@ -2,7 +2,7 @@
 const api = useApi()
 
 type HemisProgress = {
-  running: boolean; stage: string; total: number
+  running: boolean; stage: string; total: number; expected?: number
   created: number; updated: number; skipped: number; failed: number
   error?: string
 } | null
@@ -22,6 +22,8 @@ type Run = {
 }
 
 const hemis = ref<HemisProgress>(null)
+const showFilter = ref(false)
+const syncOptions = ref(emptyHemisFilter())
 const photos = ref<HemisProgress>(null)
 const hemisConfigured = ref(false)
 const devices = ref<DeviceRow[]>([])
@@ -61,7 +63,18 @@ onUnmounted(() => clearInterval(poll))
 async function runHemis() {
   error.value = ''; message.value = ''
   try {
-    await api.post('/api/sync/hemis')
+    // Bo'sh maydonlar yuborilmaydi — HEMIS ularni baribir e'tiborsiz
+    // qoldiradi, lekin logda filtr toza ko'rinsin.
+    const filter: Record<string, string | number> = {}
+    for (const [k, v] of Object.entries(syncOptions.value.filter)) {
+      if (v !== '' && v !== 0) filter[k] = v
+    }
+
+    await api.post('/api/sync/hemis', {
+      employees: syncOptions.value.employees,
+      students: syncOptions.value.students,
+      filter,
+    })
     message.value = 'HEMIS sync boshlandi.'
     await load()
   } catch (e: any) {
@@ -108,11 +121,16 @@ const totalPending = computed(() =>
   <div v-if="message" class="alert ok">{{ message }}</div>
   <div v-if="error" class="alert err">{{ error }}</div>
 
+  <HemisFilter v-if="showFilter && hemisConfigured" v-model="syncOptions" />
+
   <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px">
     <!-- 1-bosqich: HEMIS -> platforma -->
     <div class="panel">
       <div class="panel-head">
         1 · HEMIS → platforma
+        <button class="sm" :disabled="!hemisConfigured" @click="showFilter = !showFilter">
+          {{ showFilter ? 'Filtrni yopish' : 'Filtr' }}
+        </button>
         <button class="primary sm" :disabled="hemis?.running || !hemisConfigured" @click="runHemis">
           {{ hemis?.running ? 'Ketyapti…' : 'Boshlash' }}
         </button>
@@ -131,6 +149,13 @@ const totalPending = computed(() =>
         <template v-if="hemis">
           <div v-if="hemis.running" class="dim" style="margin-bottom: 8px">
             Bosqich: {{ hemis.stage === 'employees' ? 'xodimlar' : 'talabalar' }}
+            <template v-if="hemis.expected">
+              · {{ hemis.total.toLocaleString() }} / {{ hemis.expected.toLocaleString() }}
+            </template>
+          </div>
+
+          <div v-if="hemis.running && hemis.expected" class="progress" style="margin-bottom: 8px">
+            <div :style="{ width: Math.min(100, (hemis.total / hemis.expected) * 100) + '%' }" />
           </div>
 
           <div class="stats" style="grid-template-columns: repeat(4, 1fr); gap: 8px">

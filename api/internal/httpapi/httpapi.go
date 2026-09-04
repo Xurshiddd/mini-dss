@@ -28,6 +28,9 @@ type API struct {
 	auth      *auth.Service
 	sync      *syncsvc.Service
 	loginRate *rateLimiter
+
+	// HEMIS filtr ro'yxatlari keshi.
+	hemisOptions optionsCache
 }
 
 func New(cfg config.Config, st *store.Store, a *auth.Service, sy *syncsvc.Service) *API {

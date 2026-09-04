@@ -141,6 +141,32 @@ HemisApiSource (keyin) ─┘
 `ElmsDbSource` — elms PostgreSQL'ga **read-only** ulanish (`students`, `employees`).
 Almashtirish `config/minidss.php` dagi `source` qiymatida.
 
+#### HEMIS talaba filtrlari (2026-09-04 da o'lchandi)
+
+`GET /rest/v1/data/student-list` qabul qiladigan parametrlar (hammasi VA
+bilan birlashadi): `_department`, `_specialty`, `_group`, `_curriculum`,
+`_level`, `_semester`, `_education_form`, `_education_type`,
+`_student_status`, `_gender`, `_citizenship`, `_province`, `_district`,
+`search`, `passport_pin` + `passport_number`, `tutor_pin`,
+`updated_at_from`, `updated_at_to`.
+
+| Bilim | Tafsilot |
+|---|---|
+| ⚠️ `_payment_form` ishlamaydi | `11` ham, `12` ham 7120 ta (= jami) qaytardi — shuning uchun u so'rovga yuborilmaydi, javob ustida saralanadi |
+| ⚠️ Turar joy filtri YO'Q | `_accommodation` (va `accommodation`, `_living_status`) jimgina e'tiborsiz qoladi. Maydonning o'zi javobda bor (`accommodation.code`), shuning uchun yotoqxona (`15`) mahalliy saralanadi: 1985 / 7120. Alohida `dormitory-list` endpointi ham yo'q (404) |
+| ⚠️ Vergulli ro'yxat yo'q | `_education_form=11,13` → 0 ta. Xato emas, jimgina bo'sh javob |
+| ⚠️ Standart holat = `11` | filtrsiz faqat "O'qimoqda" keladi (7120); `_student_status=-1` bersa hammasi (17120) |
+| ⚠️ Harfli kod → HTTP 500 | `_group=abc` "Ichki server xatosi" beradi, 400 emas. Tekshiruv bizda: `hemis.StudentFilter.Validate` |
+| ⚠️ Kurslar `h_course` da | `h_level` degan klassifikator YO'Q; `_level` esa `h_course` kodlarini (11…16) oladi |
+| ⚠️ Viloyat va tuman bitta ro'yxatda | `h_soato`: viloyatda `_parent` o'z kodiga teng, tumanda viloyat kodi. Ajratishning boshqa belgisi yo'q |
+| `pagination.totalCount` | filtr natijasi oldindan ma'lum — progress bar va "topiladi: N ta" shunga tayanadi |
+
+Filtr ro'yxatlari (fakultet, yo'nalish, guruh, o'quv reja va klassifikatorlar)
+`GET /api/hemis/filters` orqali beriladi (30 daqiqa keshlanadi),
+`POST /api/hemis/student-count` esa tanlangan filtr bo'yicha sonni qaytaradi.
+Sync `POST /api/sync/hemis` tanasida `{employees, students, filter}` oladi;
+tana bo'sh bo'lsa — eskisidek, hammasi filtrsiz.
+
 #### ⛔ Xodimlarni bog'lab bo'lmaydi — hal qilinishi kerak
 
 2026-08-11 da o'lchandi (elms ↔ terminaldagi 9801 odam):
