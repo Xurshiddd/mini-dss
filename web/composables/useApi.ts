@@ -46,6 +46,30 @@ export function useApi() {
     }
   }
 
+  /**
+   * Himoyalangan faylni blob sifatida oladi va vaqtinchalik URL qaytaradi.
+   *
+   * ⚠️ Token URL'ga EMAS, Authorization sarlavhasiga qo'yiladi — shu sababli
+   * u server loglariga, brauzer tarixiga yoki Referer'ga tushmaydi.
+   * Chaqiruvchi URL'ni `revokePhoto` bilan bo'shatishi kerak.
+   *
+   * Fayl bo'lmasa (404) bo'sh satr qaytadi.
+   */
+  async function blobUrl(path: string): Promise<string> {
+    const jwt = token.get()
+    const res = await fetch(base + path, {
+      headers: jwt ? { Authorization: `Bearer ${jwt}` } : {},
+    })
+    if (!res.ok) {
+      if (res.status === 401) {
+        token.clear()
+        await navigateTo('/login')
+      }
+      return ''
+    }
+    return URL.createObjectURL(await res.blob())
+  }
+
   return {
     base,
     get: <T>(path: string) => request<T>(path),
@@ -82,29 +106,8 @@ export function useApi() {
       link.click()
       URL.revokeObjectURL(url)
     },
-    /**
-     * Rasmni blob sifatida oladi va vaqtinchalik object URL qaytaradi.
-     *
-     * ⚠️ Token URL'ga EMAS, Authorization sarlavhasiga qo'yiladi — shu
-     * sababli u server loglariga, brauzer tarixiga yoki Referer'ga
-     * tushmaydi. Chaqiruvchi URL'ni `revokePhoto` bilan bo'shatishi kerak.
-     *
-     * Rasm bo'lmasa (404) bo'sh satr qaytadi.
-     */
-    async photoBlob(personId: number): Promise<string> {
-      const jwt = token.get()
-      const res = await fetch(`${base}/api/people/${personId}/photo`, {
-        headers: jwt ? { Authorization: `Bearer ${jwt}` } : {},
-      })
-      if (!res.ok) {
-        if (res.status === 401) {
-          token.clear()
-          await navigateTo('/login')
-        }
-        return ''
-      }
-      return URL.createObjectURL(await res.blob())
-    },
+    blobUrl,
+    photoBlob: (personId: number) => blobUrl(`/api/people/${personId}/photo`),
 
     revokePhoto(url: string) {
       if (url) URL.revokeObjectURL(url)

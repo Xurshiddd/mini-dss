@@ -110,6 +110,7 @@ const kindLabel: Record<string, string> = {
   photo_fetch: 'Rasmlarni yuklash',
   push_users: 'Platforma → terminal',
   pull_users: 'Terminaldan import',
+  draft_pull: 'Terminaldan qoralama yig\'ish',
   wipe: 'Terminal tozalash',
 }
 

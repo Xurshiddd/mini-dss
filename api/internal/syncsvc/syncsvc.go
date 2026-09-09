@@ -52,6 +52,7 @@ type Service struct {
 	progress map[int64]*Progress
 	hemis    *HemisProgress
 	photos   *HemisProgress
+	drafts   *HemisProgress
 
 	// Hodisa yig'ish (qo'lda va avtomatik) bir vaqtda ketmasin.
 	eventsMu sync.Mutex

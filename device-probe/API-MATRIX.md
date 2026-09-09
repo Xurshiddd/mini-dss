@@ -46,7 +46,7 @@ Auth: **HTTP Digest**, hamma CGI endpointlarda.
 | `AccessFace.cgi?action=count` | Web 5.0 — yo'q |
 | `AccessCard.cgi?action=count` | Web 5.0 — yo'q |
 | `AccessControl.cgi?action=getCaps` | yo'q |
-| `FaceInfoManager.cgi?action=getCaps` / `find` | CGI sifatida yo'q (RPC2 da bor — quyiga qarang) |
+| `FaceInfoManager.cgi?action=getCaps` / `find` / `get` / `getFace` / `list` / `export` | CGI'da yuz O'QISH umuman yo'q — GET ham, JSON POST ham `400`. RPC2 da bor (§5.1) |
 | `recordUpdater.cgi?action=getCaps` | `getCaps` yaroqsiz action; CGI mavjudligi **aniqlanmadi** |
 | `recordFinder.cgi?action=getQuerySize&name=FaceRecognition` | bunday jadval yo'q |
 | `recordFinder.cgi?action=factory.create` | **stateful finder umuman yo'q** |
@@ -141,6 +141,46 @@ Kirish uchun RPC2 sessiya login kerak (Faza 1 ga qoldirildi).
 | `FaceInfoManager.getCaps` | yuz algoritmi imkoniyatlari (`caps.RecognitionAlgorithm`) |
 | `Attendance.webStatis`, `.addCheckGroup`, `.getWorkOrder` … | qurilmaning **ichki davomat** moduli |
 | `accessControl.getDoorStatus`, `accessControl.factory` | eshik holati |
+
+### 5.1 Yuz o'qish — jonli qurilmada TASDIQLANGAN (2026-09-09)
+
+Metodlar taxmin qilinmadi, qurilmaning o'zidan so'raldi:
+
+```bash
+POST /RPC2   {"method":"AccessFace.listMethod"}        # va FaceInfoManager.listMethod
+```
+
+> ⚠️ `system.listMethod` `name`/`service` parametrini **jimgina e'tiborsiz
+> qoldiradi** va doim `system` ning o'z metodlarini qaytaradi. Xizmat
+> metodlarini bilish uchun `<service>.listMethod` chaqirilsin. Ilgari
+> `AccessFace.*` "yo'q" degan xulosa aynan shundan kelib chiqqan edi.
+
+| Xizmat | Metodlar (qurilma bergan ro'yxat) |
+|---|---|
+| `FaceInfoManager` | `add` `get` `update` `remove` `clear` `startFind` `doFind` `stopFind` `getCaps` `getFaceEigen` `returnUserPicture` `listMethod` |
+| `AccessFace` | `insertMulti` `list` `updateMulti` `removeAll` `removeMulti` `startFind` `doFind` `stopFind` `attachFaceDetection` `detachFaceDetection` `listMethod` |
+
+| Chaqiruv | Natija |
+|---|---|
+| `FaceInfoManager.get` `{UserID}` | ✅ `info.PhotoData[0]` — base64 JPEG (bitta odam) |
+| `AccessFace.list` `{UserIDList}` | ✅ `FaceDataList[{UserID, PhotoData[]}]` — **to'da bo'lib o'qish** |
+| `AccessFace.startFind` → `doFind` → `stopFind` | ✅ yuzi BOR odamlar ro'yxati (`Total` = 9797, `Caps` = 1000) |
+| `FaceInfoManager.startFind` → `doFind` | ✅ lekin faqat `{UserID, MD5}` — rasmsiz |
+| `FaceInfoManager.returnUserPicture` / `getFaceEigen` | ⚠️ bor, lekin parametr shakli aniqlanmagan (`Request invalid param!`) |
+| `FaceInfoManager.getPhoto` / `find` / `getFaceInfo`, `AccessFace.getMulti` / `get` / `find` | ❌ `Method not found!` |
+| `RPC_Loadfile` MD5 yo'llari bilan | ❌ ulanish uziladi (EOF) — bu yo'l kerak emas |
+
+> ⚠️ **Harf registri xizmatlar orasida bir xil emas** va noto'g'risi
+> tushunarsiz xato beradi:
+> `FaceInfoManager.doFind` → `token`/`offset`/`count`, javob `info`;
+> `AccessFace.doFind` → `Token`/`Offset`/`Count`, javob `Info`.
+>
+> ⚠️ `startFind` ning `condition` parametri **e'tiborsiz qoladi**: qanday
+> berilmasin `Total` o'zgarmaydi. Filtrlash yo'q — faqat sahifalash.
+>
+> ⚠️ Qurilmada yuzi yo'q `UserID` javobga **umuman tushmaydi** va xato ham
+> bermaydi — "yuz yo'q" ni "so'rov muvaffaqiyatsiz" dan shu bilan ajratish
+> kerak.
 
 ---
 

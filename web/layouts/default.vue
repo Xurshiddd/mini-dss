@@ -8,6 +8,7 @@ onMounted(init)
 const nav = [
   { to: '/', label: 'Boshqaruv paneli', icon: 'grid' },
   { to: '/people', label: 'Odamlar', icon: 'users' },
+  { to: '/drafts', label: 'Qoralamalar', icon: 'draft' },
   { to: '/reports', label: 'Hisobot', icon: 'report' },
   { to: '/devices', label: 'Qurilmalar', icon: 'device' },
   { to: '/sync', label: 'Sinxronizatsiya', icon: 'sync' },

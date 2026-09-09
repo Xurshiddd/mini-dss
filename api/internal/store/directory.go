@@ -251,7 +251,9 @@ func (s *Store) SetPeopleActiveByFilter(ctx context.Context, f PeopleFilter, act
 		UPDATE people p SET is_active = $4, updated_at = now()
 		WHERE ($1 = '' OR p.full_name ILIKE '%'||$1||'%' OR p.user_id ILIKE '%'||$1||'%')
 		  AND ($2 = '' OR p.source = $2)
-		  AND ($3 = '' OR p.photo_status = $3)
+		  AND ($3 = '' OR COALESCE(
+		        (SELECT op.status FROM person_photos op WHERE op.id = p.photo_override_id),
+		        p.photo_status) = $3)
 		  AND ($5 = 0 OR p.department_id = $5)
 		  AND ($6 = '' OR p.person_type = $6)
 		  AND ($7 = '' OR p.gender = $7)`,
@@ -382,11 +384,17 @@ type PhotoCandidate struct {
 
 // PeopleNeedingPhoto — manbada rasmi bor, lekin bizda hali yo'q yoki
 // manbadagi URL o'zgargan odamlar.
+//
+// ⚠️ Rasmi QO'LDA almashtirilganlar (`photo_override_id`) CHIQARIB
+// TASHLANADI. Bunsiz HEMIS oqimi ularni har safar qaytadan yuklab, qo'lda
+// qo'yilgan rasm ustiga yozardi: `photo_metrics->>'source_url'` qo'lda
+// yuklashda to'ldirilmaydi, ya'ni shart doim "o'zgargan" chiqardi.
 func (s *Store) PeopleNeedingPhoto(ctx context.Context, limit int) ([]PhotoCandidate, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, user_id, photo_source_url
 		FROM people
 		WHERE photo_source_url IS NOT NULL AND photo_source_url <> ''
+		  AND photo_override_id IS NULL
 		  AND (photo_path IS NULL
 		       OR photo_status IN ('missing', 'pending')
 		       OR photo_metrics->>'source_url' IS DISTINCT FROM photo_source_url)
@@ -452,10 +460,14 @@ func (s *Store) UpdatePersonPhotoFromSource(ctx context.Context, personID int64,
 		return nil
 	}
 
+	// ⚠️ Rasmi qo'lda almashtirilgan odamga TEGMAYMIZ: terminaldagi yuz
+	// o'zgarmadi, qayta yozish esa ~500 ms/odam bekorga sarflanardi.
 	_, err := s.pool.Exec(ctx, `
-		UPDATE device_person_sync
+		UPDATE device_person_sync d
 		SET state = 'pending', face_synced = false, updated_at = now()
-		WHERE person_id = $1 AND state <> 'removed'`, personID)
+		WHERE d.person_id = $1 AND d.state <> 'removed'
+		  AND EXISTS (SELECT 1 FROM people p
+		               WHERE p.id = d.person_id AND p.photo_override_id IS NULL)`, personID)
 	return err
 }
 

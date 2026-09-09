@@ -6,11 +6,20 @@
  * loglarga tushadi). Bu komponent rasmni Authorization sarlavhasi bilan
  * blob qilib oladi — token URL'da qolmaydi.
  */
-const props = defineProps<{ personId: number; bust?: string | number }>()
+const props = defineProps<{
+  /** Odam rasmi uchun. `path` berilsa e'tiborga olinmaydi. */
+  personId?: number
+  /** Ixtiyoriy API yo'li — masalan qoralama rasmi. */
+  path?: string
+  bust?: string | number
+}>()
 const api = useApi()
 
 const src = ref('')
 const failed = ref(false)
+
+const target = computed(() =>
+  props.path ?? (props.personId ? `/api/people/${props.personId}/photo` : ''))
 
 async function load() {
   // Oldingi blob'ni bo'shatamiz — aks holda xotira oqadi.
@@ -18,8 +27,13 @@ async function load() {
   src.value = ''
   failed.value = false
 
+  if (!target.value) {
+    failed.value = true
+    return
+  }
+
   try {
-    const url = await api.photoBlob(props.personId)
+    const url = await api.blobUrl(target.value)
     if (url) src.value = url
     else failed.value = true
   } catch {
@@ -28,7 +42,7 @@ async function load() {
 }
 
 // `bust` o'zgarsa (masalan rasm yangilangach) qayta yuklaymiz.
-watch(() => [props.personId, props.bust], load)
+watch(() => [target.value, props.bust], load)
 onMounted(load)
 onUnmounted(() => api.revokePhoto(src.value))
 </script>

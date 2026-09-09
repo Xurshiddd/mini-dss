@@ -147,17 +147,20 @@ func (s *Store) MarkDeviceError(ctx context.Context, id int64, msg string) {
 // --------------------------------------------------------------------- odamlar
 
 type Person struct {
-	ID           int64      `json:"id"`
-	UserID       string     `json:"user_id"`
-	LegacyUserID *string    `json:"legacy_user_id"`
-	FullName     string     `json:"full_name"`
-	Source       string     `json:"source"`
-	PhotoPath    *string    `json:"photo_path"`
-	PhotoStatus  string     `json:"photo_status"`
-	PhotoReason  *string    `json:"photo_reject_reason"`
-	ValidFrom    *time.Time `json:"valid_from"`
-	ValidTo      *time.Time `json:"valid_to"`
-	IsActive     bool       `json:"is_active"`
+	ID           int64   `json:"id"`
+	UserID       string  `json:"user_id"`
+	LegacyUserID *string `json:"legacy_user_id"`
+	FullName     string  `json:"full_name"`
+	Source       string  `json:"source"`
+	PhotoPath    *string `json:"photo_path"`
+	PhotoStatus  string  `json:"photo_status"`
+	PhotoReason  *string `json:"photo_reject_reason"`
+	// Amaldagi rasm qayerdan: hemis | manual | terminal.
+	// ⚠️ `manual`/`terminal` bo'lsa HEMIS oqimi bu odamning rasmiga TEGMAYDI.
+	PhotoSource string     `json:"photo_source"`
+	ValidFrom   *time.Time `json:"valid_from"`
+	ValidTo     *time.Time `json:"valid_to"`
+	IsActive    bool       `json:"is_active"`
 	// O'chirishga belgilangan, lekin hali hamma terminaldan tozalanmagan.
 	PendingDelete bool `json:"pending_delete"`
 
@@ -190,29 +193,34 @@ type PeopleFilter struct {
 }
 
 func (s *Store) People(ctx context.Context, f PeopleFilter) ([]Person, int, error) {
+	// ⚠️ Filtr AMALDAGI rasm holati bo'yicha ishlaydi. Qo'lda almashtirilgan
+	// rasm yaroqli, HEMIS'niki rad etilgan bo'lishi mumkin — o'shanda odam
+	// "rad etilgan" ro'yxatida ko'rinib, tuzatilgan deb hisoblanmay qolardi.
 	where := `WHERE ($1 = '' OR p.full_name ILIKE '%'||$1||'%' OR p.user_id ILIKE '%'||$1||'%')
 		AND ($2 = '' OR p.source = $2)
-		AND ($3 = '' OR p.photo_status = $3)
+		AND ($3 = '' OR ` + effectivePhotoStatus + ` = $3)
 		AND ($4 = '' OR p.person_type = $4)
 		AND ($5 = 0 OR p.department_id = $5)
 		AND ($6 = '' OR p.gender = $6)`
 
 	var total int
 	if err := s.pool.QueryRow(ctx,
-		`SELECT count(*) FROM people p `+where,
+		`SELECT count(*) FROM people p `+overridePhotoJoin+` `+where,
 		f.Query, f.Source, f.PhotoStatus, f.PersonType, f.DepartmentID, f.Gender).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT p.id, p.user_id, p.legacy_user_id, p.full_name, p.source,
-		       p.photo_path, p.photo_status, p.photo_reject_reason,
+		       `+effectivePhotoPath+`, `+effectivePhotoStatus+`, `+effectivePhotoReason+`,
+		       `+effectivePhotoSource+`,
 		       p.valid_from, p.valid_to, p.is_active, p.pending_delete,
 		       p.person_type, p.department_id, dep.name, p.gender, p.status, p.access_status,
 		       p.staff_position, p.specialty, p.student_group, p.level_name,
 		       (SELECT count(*) FROM device_person_sync d
 		         WHERE d.person_id = p.id AND d.state = 'synced')
 		FROM people p
+		`+overridePhotoJoin+`
 		LEFT JOIN departments dep ON dep.id = p.department_id `+where+`
 		ORDER BY p.full_name
 		LIMIT $7 OFFSET $8`,
@@ -227,7 +235,7 @@ func (s *Store) People(ctx context.Context, f PeopleFilter) ([]Person, int, erro
 	for rows.Next() {
 		var p Person
 		if err := rows.Scan(&p.ID, &p.UserID, &p.LegacyUserID, &p.FullName, &p.Source,
-			&p.PhotoPath, &p.PhotoStatus, &p.PhotoReason,
+			&p.PhotoPath, &p.PhotoStatus, &p.PhotoReason, &p.PhotoSource,
 			&p.ValidFrom, &p.ValidTo, &p.IsActive, &p.PendingDelete,
 			&p.PersonType, &p.DepartmentID, &p.DepartmentName, &p.Gender, &p.Status, &p.AccessStatus,
 			&p.StaffPosition, &p.Specialty, &p.StudentGroup, &p.LevelName,
@@ -243,34 +251,24 @@ func (s *Store) Person(ctx context.Context, id int64) (Person, error) {
 	var p Person
 	err := s.pool.QueryRow(ctx, `
 		SELECT p.id, p.user_id, p.legacy_user_id, p.full_name, p.source,
-		       p.photo_path, p.photo_status, p.photo_reject_reason,
+		       `+effectivePhotoPath+`, `+effectivePhotoStatus+`, `+effectivePhotoReason+`,
+		       `+effectivePhotoSource+`,
 		       p.valid_from, p.valid_to, p.is_active, p.pending_delete,
 		       p.person_type, p.department_id, dep.name, p.gender, p.status, p.access_status,
 		       p.staff_position, p.specialty, p.student_group, p.level_name,
 		       (SELECT count(*) FROM device_person_sync d
 		         WHERE d.person_id = p.id AND d.state = 'synced')
 		FROM people p
+		`+overridePhotoJoin+`
 		LEFT JOIN departments dep ON dep.id = p.department_id
 		WHERE p.id = $1`, id).
 		Scan(&p.ID, &p.UserID, &p.LegacyUserID, &p.FullName, &p.Source,
-			&p.PhotoPath, &p.PhotoStatus, &p.PhotoReason,
+			&p.PhotoPath, &p.PhotoStatus, &p.PhotoReason, &p.PhotoSource,
 			&p.ValidFrom, &p.ValidTo, &p.IsActive, &p.PendingDelete,
 			&p.PersonType, &p.DepartmentID, &p.DepartmentName, &p.Gender, &p.Status, &p.AccessStatus,
 			&p.StaffPosition, &p.Specialty, &p.StudentGroup, &p.LevelName,
 			&p.SyncedOn)
 	return p, err
-}
-
-func (s *Store) UpdatePersonPhoto(ctx context.Context, id int64, path, status, reason string, metrics []byte) error {
-	var reasonArg *string
-	if reason != "" {
-		reasonArg = &reason
-	}
-	_, err := s.pool.Exec(ctx, `
-		UPDATE people SET photo_path = $2, photo_status = $3, photo_reject_reason = $4,
-			photo_metrics = $5, updated_at = now()
-		WHERE id = $1`, id, path, status, reasonArg, metrics)
-	return err
 }
 
 // MarkPhotoChanged — rasm o'zgargach, uni BARCHA qurilmaga qayta yuborish
@@ -319,16 +317,23 @@ func (s *Store) PeopleToSync(ctx context.Context, deviceID int64, retryFailed bo
 			WHERE d.person_id = p.id AND d.device_id = $1 AND d.state = 'failed')`
 	}
 
+	// ⚠️ Rasm AMALDAGISI olinadi: qo'lda almashtirilgan yoki terminaldan
+	// biriktirilgan rasm bo'lsa, terminalga AYNAN SHU ketadi. HEMIS rasmi
+	// rad etilgan bo'lsa ham, almashtirilgani yaroqli bo'lsa odam sync
+	// bo'ladi — buning uchun ham holat, ham yo'l override'dan olinadi.
 	rows, err := s.pool.Query(ctx, `
 		SELECT p.id, p.user_id, p.legacy_user_id, p.full_name, p.source,
-		       p.photo_path, p.photo_status, p.photo_reject_reason,
+		       `+effectivePhotoPath+`, `+effectivePhotoStatus+`, `+effectivePhotoReason+`,
+		       `+effectivePhotoSource+`,
 		       p.valid_from, p.valid_to, p.is_active,
 		       p.person_type, p.department_id, NULL, p.gender, p.status, p.access_status,
 		       p.staff_position, p.specialty, p.student_group, p.level_name, 0,
 		       (SELECT d.device_recno FROM device_person_sync d
 		         WHERE d.person_id = p.id AND d.device_id = $1)
 		FROM people p
-		WHERE p.is_active AND NOT p.pending_delete AND p.photo_status = 'valid'
+		`+overridePhotoJoin+`
+		WHERE p.is_active AND NOT p.pending_delete
+		  AND `+effectivePhotoStatus+` = 'valid'
 		  AND (p.valid_to IS NULL OR p.valid_to >= CURRENT_DATE)
 		  AND NOT `+studentDuplicate+`
 		  AND `+condition+`
@@ -343,7 +348,7 @@ func (s *Store) PeopleToSync(ctx context.Context, deviceID int64, retryFailed bo
 	for rows.Next() {
 		var p Person
 		if err := rows.Scan(&p.ID, &p.UserID, &p.LegacyUserID, &p.FullName, &p.Source,
-			&p.PhotoPath, &p.PhotoStatus, &p.PhotoReason,
+			&p.PhotoPath, &p.PhotoStatus, &p.PhotoReason, &p.PhotoSource,
 			&p.ValidFrom, &p.ValidTo, &p.IsActive,
 			&p.PersonType, &p.DepartmentID, &p.DepartmentName, &p.Gender, &p.Status, &p.AccessStatus,
 			&p.StaffPosition, &p.Specialty, &p.StudentGroup, &p.LevelName,

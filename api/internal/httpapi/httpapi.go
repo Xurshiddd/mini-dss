@@ -4,6 +4,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -87,6 +88,7 @@ func (a *API) Routes() http.Handler {
 		pr.Get("/api/summary", a.summary)
 		a.directoryRoutes(pr)
 		a.reportRoutes(pr)
+		a.draftRoutes(pr)
 
 		pr.Route("/api/devices", func(dr chi.Router) {
 			dr.Get("/", a.listDevices)
@@ -100,6 +102,7 @@ func (a *API) Routes() http.Handler {
 			dr.Get("/{id}/events", a.deviceEvents)
 			dr.Get("/{id}/caps", a.deviceCaps)
 			dr.Get("/{id}/face-check", a.faceCheck)
+			dr.Get("/{id}/face-probe", a.faceProbe)
 			dr.Post("/{id}/sync", a.startSync)
 			dr.Get("/{id}/sync", a.syncProgress)
 			dr.Post("/{id}/wipe", a.wipeDevice)
@@ -115,6 +118,9 @@ func (a *API) Routes() http.Handler {
 			pr2.Delete("/{id}", a.deletePerson)
 			pr2.Get("/{id}/photo", a.personPhoto)
 			pr2.Post("/{id}/photo", a.uploadPhoto)
+			pr2.Delete("/{id}/photo", a.revertPhoto)
+			pr2.Get("/{id}/photos", a.personPhotos)
+			pr2.Post("/{id}/photos/{photoID}/use", a.usePhoto)
 		})
 	})
 
@@ -863,7 +869,11 @@ func (a *API) uploadPhoto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := p.UserID + ".jpg"
+	// ⚠️ Fayl nomi HEMIS'nikidan FARQ QILADI (`<user_id>.jpg` emas).
+	// Ilgari ikkalasi bir xil faylga yozardi va "Rasmlarni yuklash"
+	// bosqichi qo'lda qo'yilgan rasmni baytma-bayt bosib ketardi — na
+	// bazada, na diskda undan nom-nishon qolardi.
+	name := fmt.Sprintf("%s-manual-%d.jpg", safePhotoName(p.UserID), time.Now().Unix())
 	if err := os.WriteFile(filepath.Join(a.cfg.PhotoDir, name), data, 0o644); err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -886,15 +896,25 @@ func (a *API) uploadPhoto(w http.ResponseWriter, r *http.Request) {
 	}
 
 	metrics, _ := json.Marshal(result.Metrics)
-	if err := a.store.UpdatePersonPhoto(r.Context(), id, "photos/"+name, status, reason, metrics); err != nil {
+
+	photoID, err := a.store.AddPersonPhoto(r.Context(), store.PersonPhotoInput{
+		PersonID:     id,
+		Source:       "manual",
+		FileName:     name,
+		Status:       status,
+		RejectReason: reason,
+		Metrics:      metrics,
+	})
+	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	// ⚠️ Rasm o'zgardi — odamni qurilmalarga qayta yuborish kerakligini
-	// belgilaymiz. Bunsiz u `synced` bo'lib qolaveradi va sync uni o'tkazib
-	// yuboradi, ya'ni yangi rasm terminalga hech qachon bormaydi.
-	if err := a.store.MarkPhotoChanged(r.Context(), id); err != nil {
+	// ⚠️ Terminalga endi AYNAN shu rasm ketadi va HEMIS oqimi bu odamning
+	// rasmiga boshqa tegmaydi. `SetPhotoOverride` qayta yozishni ham
+	// belgilaydi — bunsiz odam `synced` bo'lib qolaverardi va yangi rasm
+	// terminalga hech qachon bormasdi.
+	if err := a.store.SetPhotoOverride(r.Context(), id, &photoID); err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -905,4 +925,75 @@ func (a *API) uploadPhoto(w http.ResponseWriter, r *http.Request) {
 		"metrics": result.Metrics,
 		"reasons": result.Reasons,
 	})
+}
+
+// revertPhoto — qo'lda qo'yilgan rasmni bekor qilib, HEMIS'nikiga qaytaradi.
+//
+// Rasm yozuvi va fayli O'CHMAYDI — tarixda qoladi va qayta tanlash mumkin.
+func (a *API) revertPhoto(w http.ResponseWriter, r *http.Request) {
+	id, err := idParam(r)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "id yaroqsiz")
+		return
+	}
+
+	if err := a.store.SetPhotoOverride(r.Context(), id, nil); err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	updated, _ := a.store.Person(r.Context(), id)
+	write(w, http.StatusOK, updated)
+}
+
+// personPhotos — odamning rasm tarixi (qo'lda yuklangan va terminaldan olingan).
+func (a *API) personPhotos(w http.ResponseWriter, r *http.Request) {
+	id, err := idParam(r)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "id yaroqsiz")
+		return
+	}
+
+	photos, err := a.store.PersonPhotos(r.Context(), id)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	write(w, http.StatusOK, photos)
+}
+
+// usePhoto — tarixdagi rasmni qaytadan amaldagi qilib qo'yadi.
+func (a *API) usePhoto(w http.ResponseWriter, r *http.Request) {
+	id, err := idParam(r)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "id yaroqsiz")
+		return
+	}
+
+	photoID, err := strconv.ParseInt(chi.URLParam(r, "photoID"), 10, 64)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "rasm id yaroqsiz")
+		return
+	}
+
+	photo, err := a.store.PersonPhotoByID(r.Context(), photoID)
+	if err != nil {
+		fail(w, http.StatusNotFound, "rasm topilmadi")
+		return
+	}
+
+	// ⚠️ Boshqa odamning rasmini biriktirib bo'lmaydi — aks holda bitta
+	// yuz ikki foydalanuvchiga bog'lanib, terminal tanishda chalkashardi.
+	if photo.PersonID != id {
+		fail(w, http.StatusForbidden, "bu rasm boshqa odamniki")
+		return
+	}
+
+	if err := a.store.SetPhotoOverride(r.Context(), id, &photoID); err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	updated, _ := a.store.Person(r.Context(), id)
+	write(w, http.StatusOK, updated)
 }

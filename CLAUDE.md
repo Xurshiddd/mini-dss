@@ -35,13 +35,36 @@ Loyihaning o'z qo'shimchalari:
 ## Qurilma bilan ishlashda bilish shart
 
 - API avlodi **legacy (Web 3.0)**: `recordFinder.cgi` / `recordUpdater.cgi` /
-  `FaceInfoManager.cgi`. `AccessFace.*` va `AccessUser.getMulti` YO'Q
-  ("Method not found"), garchi `system.listService` ularni ko'rsatsa ham.
+  `FaceInfoManager.cgi`. `AccessUser.getMulti` YO'Q ("Method not found"),
+  garchi `system.listService` uni ko'rsatsa ham.
+- **Metodni taxmin qilmang — so'rang.** `<service>.listMethod` (masalan
+  `AccessFace.listMethod`) qurilmadagi HAQIQIY ro'yxatni beradi.
+  ⚠️ `system.listMethod` esa `name`/`service` parametrini jimgina e'tiborsiz
+  qoldiradi va doim `system` ning o'z metodlarini qaytaradi — shu sababli
+  `AccessFace.*` "yo'q" deb noto'g'ri xulosa qilingan edi. U BOR:
+  `list`, `startFind`/`doFind`/`stopFind`, `insertMulti`, `removeMulti`.
 - **Yozish o'qishdan ancha og'ir.** Ketma-ket yozuvda ~90 so'rovdan keyin
   qurilma javob bermay qo'yishi mumkin. Oraliq ≥700 ms, backoff bilan.
-- **Yuzni qaytib o'qib bo'lmaydi.** `face_synced = true` faqat "HTTP OK keldi"
-  degani. Yuz holatini tekshirishning yagona yo'li — kirish loglari
-  (`GET /api/devices/{id}/events`).
+- **Yuzni qaytib o'qish RPC2 da, CGI da EMAS.** Jonli terminalda
+  tasdiqlangan (2026-09-09):
+
+      FaceInfoManager.get {UserID}       → info.PhotoData[0]  (bitta)
+      AccessFace.list    {UserIDList}    → FaceDataList[]     (to'da)
+      AccessFace.startFind/doFind/stopFind → yuzi BOR odamlar ro'yxati
+
+  ⚠️ `FaceInfoManager.cgi` da o'qish YO'Q: `find`, `get`, `getFace`, `list`,
+  `getCaps`, `export` — GET ham, JSON POST ham HTTP 400 beradi, garchi shu
+  CGI'ning `add` va `remove` action'lari ishlasa ham.
+  ⚠️ Harf registri xizmatlar orasida FARQ QILADI:
+  `FaceInfoManager.doFind` → `token`/`offset`/`count`, javob `info`;
+  `AccessFace.doFind` → `Token`/`Offset`/`Count`, javob `Info`.
+  ⚠️ `startFind` ning `condition` parametri e'tiborsiz qoladi — filtrlash
+  yo'q, faqat sahifalash.
+  Shunga qaramay `face_synced = true` hamon faqat "HTTP OK keldi" degani;
+  haqiqiy holatni `GET /api/devices/{id}/face-probe?user_id=X` ko'rsatadi.
+- **Rasm manbai muhim.** `people.photo_path` — faqat HEMIS oqimi.
+  Qo'lda qo'yilgan va terminaldan olingan rasmlar `person_photos` da va
+  `people.photo_override_id` orqali tanlanadi; HEMIS oqimi ularga TEGMAYDI.
 - **Yo'nalish QURILMADAN aniqlanadi** (`devices.direction`), hodisadagi
   `Type` maydonidan emas.
 - Qurilma vaqti **lokal**, loglardagi `CreateTime` esa **epoch UTC**.

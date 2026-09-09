@@ -9,6 +9,7 @@ type Person = {
   staff_position: string | null; specialty: string | null
   student_group: string | null; level_name: string | null
   photo_path: string | null; photo_status: string; photo_reject_reason: string | null
+  photo_source: string
   is_active: boolean; pending_delete: boolean; synced_on: number
   access_status: string; valid_to: string | null
 }
@@ -167,6 +168,34 @@ async function saveCropped(blob: Blob) {
   } finally {
     uploading.value = false
   }
+}
+
+/**
+ * Rasmni HEMIS'nikiga qaytarish.
+ *
+ * ⚠️ Qo'lda qo'yilgan rasm O'CHMAYDI — u tarixda qoladi, faqat terminalga
+ * endi HEMIS rasmi ketadi.
+ */
+async function revertPhoto() {
+  if (!selected.value) return
+  if (!confirm(
+    `${selected.value.full_name} uchun HEMIS rasmi qaytarilsinmi?\n\n` +
+    `Qo'lda qo'yilgan rasm o'chmaydi, lekin terminalga endi HEMIS'niki boradi.`)) return
+
+  error.value = ''; message.value = ''
+  try {
+    selected.value = await api.del<Person>(`/api/people/${selected.value.id}/photo`)
+    photoBust.value++
+    message.value = 'HEMIS rasmi qaytarildi — keyingi sync\'da terminalga boradi.'
+    await load()
+  } catch (e: any) {
+    error.value = e.message
+  }
+}
+
+const photoSourceLabel: Record<string, string> = {
+  manual: 'Qo\'lda almashtirilgan',
+  terminal: 'Terminaldan olingan',
 }
 
 watch(selected, () => { editing.value = false })
@@ -369,9 +398,12 @@ const photoBust = ref(0)
           {{ selected.department_name || 'Bo\'limsiz' }}
         </div>
 
-        <div style="margin: 10px 0">
+        <div class="row" style="margin: 10px 0; gap: 5px">
           <span class="pill" :class="statusPill[selected.photo_status]?.cls || 'mute'">
             {{ statusPill[selected.photo_status]?.label || selected.photo_status }}
+          </span>
+          <span v-if="photoSourceLabel[selected.photo_source]" class="pill info">
+            {{ photoSourceLabel[selected.photo_source] }}
           </span>
         </div>
 
@@ -391,9 +423,21 @@ const photoBust = ref(0)
 
         <PhotoEditor v-else @done="saveCropped" @cancel="editing = false" />
 
+        <button
+          v-if="!editing && selected.photo_source !== 'hemis'"
+          class="sm"
+          style="width: 100%; margin-top: 6px"
+          @click="revertPhoto"
+        >
+          HEMIS rasmiga qaytarish
+        </button>
+
         <p class="dim" style="font-size: 11px; margin: 12px 0 0">
           Rasm terminal talablariga tekshiriladi: ko'zlar orasi ≥60px, sifat ≥50,
           bitta yuz. Almashtirilsa keyingi sync'da terminalga qayta yuklanadi.
+        </p>
+        <p v-if="selected.photo_source !== 'hemis'" class="dim" style="font-size: 11px; margin: 6px 0 0">
+          Bu rasm almashtirilgan — HEMIS'dan rasm yuklash bosqichi unga tegmaydi.
         </p>
       </div>
     </div>

@@ -102,9 +102,41 @@ device_person_sync (
   UNIQUE (device_id, person_id)
 )
 
+-- Odamning rasmlari. `people.photo_path` — faqat HEMIS oqimidagi rasm;
+-- qo'lda qo'yilgan va terminaldan olingani SHU YERDA yotadi.
+--
+-- ⚠️ Ilgari ikkalasi bitta `photo_path` / bitta `<user_id>.jpg` faylini
+-- bo'lishardi va "Rasmlarni yuklash" bosqichi qo'lda qo'yilgan rasmni
+-- jimgina bosib ketardi.
+person_photos (
+  id, person_id,
+  source,               -- 'manual' | 'terminal' | 'hemis'
+  file_name,            -- PHOTO_DIR ichidagi fayl (yo'lsiz)
+  source_url,           -- HEMIS URL yoki `device://<id>/<UserID>`
+  status,               -- 'pending'|'valid'|'rejected'
+  reject_reason, metrics,
+  device_id,            -- terminaldan olingan bo'lsa
+  created_at
+)
+-- people.photo_override_id → person_photos.id
+--   NULL   : terminalga HEMIS rasmi ketadi
+--   to'la  : terminalga SHU rasm ketadi va HEMIS oqimi odamga tegmaydi
+
+-- Terminaldan olingan yuzlar — QORALAMA. Hech kimga tegishli emas.
+photo_drafts (
+  id,
+  user_id,              -- terminaldagi UserID (unikal kalit)
+  full_name,            -- terminaldagi CardName
+  device_id, file_name, -- fayl PHOTO_DIR/drafts/ ichida
+  status, reject_reason, metrics,
+  person_id, attached_at,   -- biriktirilgan bo'lsa
+  created_at, updated_at
+)
+
 -- Sync tarixi / audit (kim nimani qachon yubordi, xato nima edi).
 sync_runs (
   id, device_id, kind,  -- 'push_users' | 'pull_users' | 'push_faces'
+                        -- | 'photo_fetch' | 'draft_pull'
   started_at, finished_at,
   total, ok_count, fail_count,
   status, error
@@ -231,12 +263,45 @@ Siz so'ragan "face id dagi ma'lumotni bazaga tortib olish":
 | Nima | Holat |
 |---|---|
 | **Foydalanuvchilar** (9801 ta: `UserID`, ism, `RecNo`, amal muddati) | ✅ **Ishlaydi** — `doSeekFind` + `offset`. Hozirgi scope'ning asosiy qismi. |
-| **Ro'yxatga olingan yuz shablonlari/fotolari** | ❓ **Noaniq** — `FaceInfoManager` CGI o'qish actioni topilmadi. RPC2 kerak bo'lishi mumkin. |
+| **Ro'yxatga olingan yuz shablonlari/fotolari** | ❓ **Noaniq** — pastdagi "Qoralama yig'ish" ga qarang. |
 | Kirish/chiqish loglari, hodisa fotolari | ✅ ishlaydi, lekin **hozirgi scope'da kerak emas** |
 
 Terminaldagi 9801 odamni bazaga tortib olish **hozir ham mumkin va birinchi
 qadam bo'lishi kerak**: kim bor, kim manbada yo'q, qaysi ID formati xato.
 Bu sync yo'nalishini tanlashdan oldin real holatni ko'rsatadi.
+
+#### Qoralama yig'ish (`POST /api/sync/drafts`)
+
+Eski DSS orqali kiritilgan odamlarning rasmi faqat terminalda qolgan —
+HEMIS ular uchun yuz bermaydi. Yig'ish ularni `photo_drafts` ga oladi:
+
+1. Terminal tanlanadi — berilmasa har bir faol qurilmada `CountUsers`
+   sanaladi va **eng ko'p yozuvlisi** olinadi (eski DSS hamma terminalga
+   bir xil yozmagan).
+2. `doSeekFind` bilan `UserID` + `CardName` o'qiladi.
+3. Har biriga `FaceInfoManager.cgi?action=find&UserID=…` yuboriladi;
+   javobda base64 kelmasa, ichidagi fayl yo'li `RPC_Loadfile` orqali
+   olinadi (u Digest'ni qabul qilmaydi — RPC2 sessiya cookie'si bilan).
+4. Rasm face-api'da tekshiriladi va qoralama sifatida saqlanadi.
+
+> ⚠️ **3-qadam bu firmware'da HALI TASDIQLANMAGAN** (`API-MATRIX.md` 8.2).
+> `action=find` probe paytida `UserID`siz yuborilgani uchun `400` bergan
+> bo'lishi mumkin. Jonli terminalda avval `GET /api/devices/{id}/face-probe?user_id=X`
+> chaqirilsin — u qaysi action rasm qaytarganini ko'rsatadi.
+>
+> Yig'ish **15 ta ketma-ket muvaffaqiyatsiz urinishdan keyin to'xtaydi**:
+> firmware yuzni bermayotgan bo'lsa 9 800 ta so'rov yuborishning ma'nosi
+> yo'q va u qurilmani bo'g'adi.
+
+Qoralama biriktirilgunicha **hech kimga ta'sir qilmaydi**. Biriktirish
+`person_photos` ga NUSXA yozadi (qoralama o'chsa ham rasm joyida qoladi) va
+`photo_override_id` ni o'sha nusxaga qaratadi.
+
+Avtomatik biriktirish faqat **bir ma'noli** mosliklarda ishlaydi: `UserID`
+(yoki `legacy_user_id`) bo'yicha bitta nomzod, yoki faqat ism bo'yicha
+topilganda butun bazada bitta nomzod. Bunsiz bir xil ismli ikki odamdan
+biriga begona yuz biriktirilib, u boshqa odamning ismi bilan eshikdan o'tib
+ketardi.
 
 ---
 

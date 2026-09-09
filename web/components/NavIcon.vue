@@ -33,6 +33,11 @@ defineProps<{ name: string }>()
       <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
       <circle cx="12" cy="12" r="3" />
     </template>
+    <template v-else-if="name === 'draft'">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <circle cx="9" cy="9.5" r="2.5" />
+      <path d="M3 18l5-4.5 3.5 3 3-2.5L21 18" />
+    </template>
     <template v-else-if="name === 'device'">
       <rect x="4" y="2" width="16" height="20" rx="2" />
       <circle cx="12" cy="10" r="3" />

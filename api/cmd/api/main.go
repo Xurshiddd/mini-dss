@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -26,6 +27,12 @@ func main() {
 
 	if err := os.MkdirAll(cfg.PhotoDir, 0o755); err != nil {
 		log.Fatalf("rasm katalogi yaratilmadi: %v", err)
+	}
+
+	// Terminaldan olingan qoralamalar ALOHIDA katalogda: ular hali hech
+	// kimga tegishli emas va odam rasmlari bilan aralashib ketmasligi kerak.
+	if err := os.MkdirAll(filepath.Join(cfg.PhotoDir, "drafts"), 0o755); err != nil {
+		log.Fatalf("qoralama katalogi yaratilmadi: %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
