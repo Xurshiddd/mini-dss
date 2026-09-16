@@ -132,7 +132,9 @@ func (s *Service) runHemis(base, token string, opts HemisOptions) {
 			errMsg = &msg
 		}
 		if deactivated > 0 {
-			log.Printf("HEMIS sync: %d ta ishdan bo'shatilgan xodim faolsizlantirildi", deactivated)
+			// Bu songa holati to'g'rilanganlar ham kiradi: `DeactivateByUserID`
+			// allaqachon nofaol xodimning eskirgan holat matnini ham yangilaydi.
+			log.Printf("HEMIS sync: %d ta bo'shagan xodim yozuvi yangilandi", deactivated)
 		}
 		if err := s.store.FinishRun(ctx, runID, status, total, created, updated, skipped, failed, errMsg); err != nil {
 			log.Printf("sync log yozilmadi: %v", err)
@@ -182,7 +184,7 @@ func (s *Service) runHemis(base, token string, opts HemisOptions) {
 			// ochaverardi. Shuning uchun mavjudini faolsizlantiramiz.
 			if e.Status.Code == hemis.EmployeeStatusDismissed || !e.Active {
 				skipped++
-				if n, err := s.store.DeactivateByUserID(ctx, e.IDNumber); err == nil && n > 0 {
+				if n, err := s.store.DeactivateByUserID(ctx, e.IDNumber, e.Status.Name); err == nil && n > 0 {
 					deactivated++
 				}
 				return nil

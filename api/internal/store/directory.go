@@ -549,10 +549,19 @@ func (s *Store) UpdatePersonPhotoFromSource(ctx context.Context, personID int64,
 //
 // ⚠️ Terminaldan O'CHIRMAYDI — bu alohida amal. Bu yerda faqat bazadagi
 // holat o'zgaradi va odam keyingi sync'larda yuborilmaydi.
-func (s *Store) DeactivateByUserID(ctx context.Context, userID string) (int64, error) {
+//
+// ⚠️ Holat MATNI ham yangilanadi. Bo'shagan xodim `UpsertPerson` dan
+// o'tmaydi (sync uni darhol chetlab o'tadi), shuning uchun bu yerda
+// yozilmasa panelda eski matn qolib ketadi: odam nofaol, lekin holati
+// "Ishlamoqda" deb turadi va nega o'chirilgani tushunarsiz bo'ladi
+// (jonli bazada 47 ta nofaol xodimning 46 tasi shunday edi).
+func (s *Store) DeactivateByUserID(ctx context.Context, userID, status string) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE people SET is_active = false, updated_at = now()
-		WHERE user_id = $1 AND is_active`, userID)
+		UPDATE people
+		SET is_active = false,
+		    status = COALESCE(NULLIF($2, ''), status),
+		    updated_at = now()
+		WHERE user_id = $1 AND (is_active OR status IS DISTINCT FROM $2)`, userID, status)
 	if err != nil {
 		return 0, err
 	}
