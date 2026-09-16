@@ -294,6 +294,65 @@ func (a *API) markDeleted(w http.ResponseWriter, r *http.Request, ids []int64) {
 	})
 }
 
+// syncSelected — TANLANGAN odamlarni barcha faol terminallarga yozadi.
+//
+// Oddiy sync'dan farqi: qurilmadagi mavjud yozuvlarga qaramaydi (tanlangan
+// odam allaqachon yozilgan bo'lsa yuzi qaytadan yuboriladi) va hech kimni
+// terminaldan olib tashlamaydi.
+//
+// Rasmi tekshiruvdan o'tmagan odam yuborilMAYDI: yuzsiz foydalanuvchi
+// terminalda hech kimni kiritmaydi. Nechtasi shu sababdan chetda qolgani
+// javobda qaytadi.
+func (a *API) syncSelected(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		fail(w, http.StatusBadRequest, "so'rov o'qilmadi")
+		return
+	}
+	if len(in.IDs) == 0 {
+		fail(w, http.StatusUnprocessableEntity, "hech kim tanlanmadi")
+		return
+	}
+
+	ids, err := a.store.SyncableIDs(r.Context(), in.IDs)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	skipped := len(in.IDs) - len(ids)
+	if len(ids) == 0 {
+		fail(w, http.StatusUnprocessableEntity,
+			"tanlanganlarning hech birini yuborib bo'lmaydi — rasmi yaroqli, "+
+				"o'zi faol va muddati o'tmagan bo'lishi kerak")
+		return
+	}
+
+	devices, err := a.store.ActiveDevices(r.Context())
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	started, busy := 0, 0
+	for _, d := range devices {
+		if err := a.sync.StartSelected(d.ID, ids); err != nil {
+			busy++
+			continue
+		}
+		started++
+	}
+
+	write(w, http.StatusAccepted, map[string]any{
+		"started": started,
+		"busy":    busy,
+		"devices": len(devices),
+		"people":  len(ids),
+		"skipped": skipped,
+	})
+}
+
 func (a *API) startPhotoFetch(w http.ResponseWriter, r *http.Request) {
 	if err := a.sync.StartPhotoFetch(a.cfg.FaceAPI); err != nil {
 		fail(w, http.StatusConflict, err.Error())
@@ -359,8 +418,10 @@ func (a *API) directoryRoutes(r chi.Router) {
 	r.Get("/api/sync/hemis", a.hemisProgress)
 	r.Get("/api/hemis/filters", a.hemisFilters)
 	r.Post("/api/hemis/student-count", a.hemisStudentCount)
+	r.Post("/api/hemis/employee-count", a.hemisEmployeeCount)
 	r.Post("/api/sync/photos", a.startPhotoFetch)
 	r.Get("/api/sync/photos", a.photoProgress)
 	r.Post("/api/sync/devices", a.syncAll)
+	r.Post("/api/sync/selected", a.syncSelected)
 	r.Get("/api/sync/runs", a.syncRuns)
 }

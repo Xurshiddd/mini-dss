@@ -14,9 +14,13 @@ import (
 // RPC2 (JSON-RPC) — TEZ yozish yo'li.
 //
 // O'lchangan: RPC2 42 ms/yozuv, legacy CGI 565 ms/yozuv (13× farq).
-// Sabab batch EMAS — bu firmware ommaviy yozishni umuman qo'llab-quvvatlamaydi
-// (`RecordUpdater.import` bo'sh xato bilan rad etadi, CGI da ham yo'q).
-// Farq Digest'ning ikki borish-kelishida.
+// Farq Digest'ning ikki borish-kelishida va har so'rovda yangi TCP
+// ulanishda: qurilma digest challenge'ida ulanishni yopadi, RPC2 esa
+// bitta sessiya ulanishini qayta ishlatadi.
+//
+// ⚠️ To'da bo'lib yozish tezlikni deyarli oshirmaydi (yuzlar uchun
+// o'lchangan: 4 talik to'da atigi ~14% tejaydi) — vaqt qurilmaning
+// ichida ketadi, tarmoqda emas.
 
 func md5Sum(s string) []byte {
 	sum := md5.Sum([]byte(s))
@@ -230,7 +234,18 @@ func (c *Client) rpcSend(ctx context.Context, method string, params map[string]a
 
 // KeepAlive — sessiya tugab qolmasligi uchun davriy signal.
 func (c *Client) KeepAlive(ctx context.Context) {
-	_, _ = c.rpc(ctx, "global.keepAlive", map[string]any{"timeout": 60, "active": true}, 0)
+	_ = c.Alive(ctx)
+}
+
+// Alive — qurilma javob berayotganini YENGIL tekshiradi (RPC2 sessiya
+// ulanishi orqali).
+//
+// ⚠️ `Ping` emas: u CGI orqali ketadi va har chaqiruvda uchta yangi TCP
+// ulanish ochadi — qurilma allaqachon ulanishdan qiynalayotgan paytda
+// aynan shuni qilmaslik kerak.
+func (c *Client) Alive(ctx context.Context) error {
+	_, err := c.rpc(ctx, "global.keepAlive", map[string]any{"timeout": 60, "active": true}, 0)
+	return err
 }
 
 // RecordUpdaterInstance — yozuv jadvali uchun obyekt handle'i oladi.
@@ -326,6 +341,15 @@ func CardRecord(userID, name, validFrom, validTo string, door, timeSection int) 
 	}
 }
 
+// RemoveUserByRecNo — foydalanuvchi yozuvini RecNo bo'yicha o'chiradi.
+//
+// Jonli terminalda o'lchangan (2026-09-16): 90 ms, yangi TCP ulanishsiz.
+// CGI yo'li (`recordUpdater.cgi?action=remove`) ~700 ms va uchta ulanish.
+func (c *Client) RemoveUserByRecNo(ctx context.Context, object, recNo int) error {
+	_, err := c.rpc(ctx, "RecordUpdater.remove", map[string]any{"recno": recNo}, object)
+	return err
+}
+
 // InsertUser — foydalanuvchi qo'shadi, RecNo qaytaradi. Tez yo'l.
 func (c *Client) InsertUser(ctx context.Context, object int, record map[string]any) (int, error) {
 	resp, err := c.rpc(ctx, "RecordUpdater.insert", map[string]any{"record": record}, object)
@@ -340,4 +364,18 @@ func (c *Client) InsertUser(ctx context.Context, object int, record map[string]a
 		return 0, fmt.Errorf("insert recno qaytarmadi")
 	}
 	return p.RecNo, nil
+}
+
+// UpdateUser — mavjud karta yozuvini RecNo bo'yicha yangilaydi.
+//
+// Jonli terminalda tekshirilgan (2026-09-16): 131 ms, nom o'zgargani
+// `RecordUpdater.get {recno}` orqali tasdiqlangan. Yozuvni QAYTA O'QISH
+// uchun ham shu `get` ishlatilsin — CGI `recordFinder` bilan bitta
+// foydalanuvchini qidirish 10 ming yozuvli qurilmada 1.5–2.5 DAQIQA oladi.
+func (c *Client) UpdateUser(ctx context.Context, object, recNo int, record map[string]any) error {
+	_, err := c.rpc(ctx, "RecordUpdater.update", map[string]any{
+		"recno":  recNo,
+		"record": record,
+	}, object)
+	return err
 }

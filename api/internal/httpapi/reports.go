@@ -52,7 +52,8 @@ func (a *API) filterFrom(r *http.Request) (store.AttendanceFilter, error) {
 		return store.AttendanceFilter{}, err
 	}
 
-	limit := 500
+	// Sahifa hajmi ODAM bo'yicha (`store.AttendanceFilter`ga qarang).
+	limit := 20
 	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 && n <= 5000 {
 		limit = n
 	}
@@ -93,16 +94,28 @@ func (a *API) reportDays(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := a.store.AttendanceDays(r.Context(), a.cfg.Timezone.String(), f)
+	tz := a.cfg.Timezone.String()
+
+	rows, err := a.store.AttendanceDays(r.Context(), tz, f)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Jami — sahifalash uchun: oraliqda nechta ODAM yozuv qoldirgan.
+	total, err := a.store.AttendancePeopleCount(r.Context(), tz, f)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	write(w, http.StatusOK, map[string]any{
-		"from": f.From.Format("2006-01-02"),
-		"to":   f.To.Format("2006-01-02"),
-		"rows": rows,
+		"from":   f.From.Format("2006-01-02"),
+		"to":     f.To.Format("2006-01-02"),
+		"rows":   rows,
+		"total":  total,
+		"limit":  f.Limit,
+		"offset": f.Offset,
 	})
 }
 
@@ -140,6 +153,7 @@ func (a *API) reportPerson(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.PersonID = id
+	f.Limit, f.Offset = 1, 0 // bitta odam — sahifalash kerak emas
 
 	person, err := a.store.Person(r.Context(), id)
 	if err != nil {

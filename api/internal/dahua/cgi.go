@@ -416,14 +416,17 @@ func (c *Client) RemoveFace(ctx context.Context, userID string) error {
 	return nil
 }
 
-// UploadFace — yuz rasmini yuklaydi.
+// UploadFace — yuz rasmini CGI orqali yuklaydi. ESKI YO'L.
+//
+// ⚠️ Sync bu yo'ldan FOYDALANMAYDI: `AccessFace.insertMulti` (RPC2) ham
+// tezroq (0.45 s vs 0.75 s), ham har so'rovga uchta yangi TCP ulanish
+// ochmaydi — aynan shu ulanishlar terminalni ~2500 odamdan keyin
+// o'ldirardi. Batafsil: `face.go` dagi "yuz YOZISH" izohi.
+//
+// Bu yerda diagnostika va zaxira yo'l sifatida qoldirilgan.
 //
 // ⚠️ base64 so'rov TANASIDA yuboriladi, query'da emas: 60 KB rasm ~80 KB
 // base64 beradi va URL uzunligi chegarasidan oshadi.
-//
-// RPC2 da yuz qo'shish metodi YO'Q (qurilma bundle'ida faqat
-// FaceInfoManager.getCaps bor) — shuning uchun bu CGI orqali ketadi va
-// sekinroq (~450 ms, base64 hajmi tufayli).
 func (c *Client) UploadFace(ctx context.Context, userID string, jpeg []byte) error {
 	payload := map[string]any{
 		"UserID": userID,
@@ -525,7 +528,10 @@ func (c *Client) NTPConfig(ctx context.Context) (NTPConfig, error) {
 	}, nil
 }
 
-// ReplaceFace — mavjud yuzni yangisiga almashtiradi.
+// ReplaceFace — mavjud yuzni yangisiga almashtiradi (CGI, eski yo'l).
+//
+// RPC2 da bu bitta so'rov: `AccessFace.updateMulti` (0.29 s) — o'chirib
+// qayta yozish kerak emas.
 //
 // ⚠️ `action=add` MAVJUD UserID uchun HTTP 400 qaytaradi — ustiga YOZMAYDI.
 // Shu sababli avval eskisi o'chiriladi. Bunsiz rasm yangilanganda yangi rasm

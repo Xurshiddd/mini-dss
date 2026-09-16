@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // ------------------------------------------------------------------ bo'limlar
@@ -165,6 +167,38 @@ type PersonInput struct {
 	IsActive bool
 }
 
+const personUpsertSQL = `
+	INSERT INTO people (
+		external_id, source, person_type, user_id, full_name,
+		gender, birth_date, department_id, status,
+		staff_position, specialty, student_group, level_name,
+		education_form, education_type, payment_form,
+		is_active, access_status, valid_to, photo_source_url,
+		photo_status, synced_at, created_at, updated_at)
+	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+	        'missing', now(), now(), now())
+	ON CONFLICT (user_id) DO UPDATE SET
+		external_id = EXCLUDED.external_id, source = EXCLUDED.source,
+		person_type = EXCLUDED.person_type, full_name = EXCLUDED.full_name,
+		gender = EXCLUDED.gender, birth_date = EXCLUDED.birth_date,
+		department_id = EXCLUDED.department_id, status = EXCLUDED.status,
+		staff_position = EXCLUDED.staff_position, specialty = EXCLUDED.specialty,
+		student_group = EXCLUDED.student_group, level_name = EXCLUDED.level_name,
+		education_form = EXCLUDED.education_form, education_type = EXCLUDED.education_type,
+		payment_form = EXCLUDED.payment_form, is_active = EXCLUDED.is_active,
+		access_status = EXCLUDED.access_status, valid_to = EXCLUDED.valid_to,
+		photo_source_url = EXCLUDED.photo_source_url,
+		synced_at = now(), updated_at = now()
+	RETURNING id, (xmax = 0) AS created`
+
+func personArgs(in PersonInput) []any {
+	return []any{in.ExternalID, in.Source, in.PersonType, in.UserID, in.FullName,
+		in.Gender, in.BirthDate, in.DepartmentID, in.Status,
+		in.StaffPosition, in.Specialty, in.StudentGroup, in.LevelName,
+		in.EducationForm, in.EducationType, in.PaymentForm, in.IsActive,
+		defaultAccess(in.AccessStatus), in.ValidTo, nullIfEmpty(in.PhotoURL)}
+}
+
 // UpsertPerson — `user_id` bo'yicha qo'shadi yoki yangilaydi.
 //
 // ⚠️ Rasm maydonlariga TEGILMAYDI — ular alohida oqim orqali boshqariladi
@@ -175,47 +209,58 @@ func (s *Store) UpsertPerson(ctx context.Context, in PersonInput) (int64, bool, 
 	var id int64
 	var created bool
 
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO people (
-			external_id, source, person_type, user_id, full_name,
-			gender, birth_date, department_id, status,
-			staff_position, specialty, student_group, level_name,
-			education_form, education_type, payment_form,
-			is_active, access_status, valid_to, photo_source_url,
-			photo_status, synced_at, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-		        'missing', now(), now(), now())
-		ON CONFLICT (user_id) DO UPDATE SET
-			external_id = EXCLUDED.external_id,
-			source = EXCLUDED.source,
-			person_type = EXCLUDED.person_type,
-			full_name = EXCLUDED.full_name,
-			gender = EXCLUDED.gender,
-			birth_date = EXCLUDED.birth_date,
-			department_id = EXCLUDED.department_id,
-			status = EXCLUDED.status,
-			staff_position = EXCLUDED.staff_position,
-			specialty = EXCLUDED.specialty,
-			student_group = EXCLUDED.student_group,
-			level_name = EXCLUDED.level_name,
-			education_form = EXCLUDED.education_form,
-			education_type = EXCLUDED.education_type,
-			payment_form = EXCLUDED.payment_form,
-			is_active = EXCLUDED.is_active,
-			access_status = EXCLUDED.access_status,
-			valid_to = EXCLUDED.valid_to,
-			photo_source_url = EXCLUDED.photo_source_url,
-			synced_at = now(),
-			updated_at = now()
-		RETURNING id, (xmax = 0) AS created`,
-		in.ExternalID, in.Source, in.PersonType, in.UserID, in.FullName,
-		in.Gender, in.BirthDate, in.DepartmentID, in.Status,
-		in.StaffPosition, in.Specialty, in.StudentGroup, in.LevelName,
-		in.EducationForm, in.EducationType, in.PaymentForm, in.IsActive,
-		defaultAccess(in.AccessStatus), in.ValidTo, nullIfEmpty(in.PhotoURL)).
+	err := s.pool.QueryRow(ctx, personUpsertSQL, personArgs(in)...).
 		Scan(&id, &created)
 
 	return id, created, err
+}
+
+// UpsertPeopleBatch HEMIS sahifasini bitta PostgreSQL pipeline'da yozadi.
+// Batch xato qilsa, yaroqli qatorlarni yo'qotmaslik uchun bittalab qayta uradi.
+func (s *Store) UpsertPeopleBatch(ctx context.Context, inputs []PersonInput) (created, updated, failed int) {
+	if len(inputs) == 0 {
+		return
+	}
+	batch := &pgx.Batch{}
+	for _, in := range inputs {
+		batch.Queue(personUpsertSQL, personArgs(in)...)
+	}
+	results := s.pool.SendBatch(ctx, batch)
+	batchOK := true
+	for range inputs {
+		var id int64
+		var isNew bool
+		if err := results.QueryRow().Scan(&id, &isNew); err != nil {
+			batchOK = false
+			break
+		}
+		if isNew {
+			created++
+		} else {
+			updated++
+		}
+	}
+	if err := results.Close(); err != nil {
+		batchOK = false
+	}
+	if batchOK {
+		return
+	}
+
+	created, updated = 0, 0
+	for _, in := range inputs {
+		_, isNew, err := s.UpsertPerson(ctx, in)
+		if err != nil {
+			failed++
+			continue
+		}
+		if isNew {
+			created++
+		} else {
+			updated++
+		}
+	}
+	return
 }
 
 // PersonPhotoURL — sync paytida rasm yuklab olinishi kerakmi, shuni bilish
@@ -320,6 +365,30 @@ func (s *Store) StartRun(ctx context.Context, kind string, deviceID *int64) (int
 	return id, err
 }
 
+// RecoverInterruptedRuns — yarim qolgan sync loglarini yopadi.
+//
+// `sync_runs.status` faqat jarayon ichida `done`/`failed` ga o'tadi, ya'ni
+// server to'satdan o'chsa (kompyuter qayta yuklandi, konteyner o'ldirildi)
+// yozuv abadiy `running` bo'lib qoladi va panelda "Ketyapti" ko'rinadi.
+//
+// ⚠️ Faqat ISHGA TUSHISHDA chaqiriladi: o'sha paytda hech qanday sync
+// ketayotgan bo'lishi mumkin emas (jarayon endi boshlandi), demak
+// `running` topilsa u albatta uzilgan. Ishlab turgan serverda chaqirilsa
+// jonli sync'ning logini xato yopib qo'yardi.
+func (s *Store) RecoverInterruptedRuns(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE sync_runs
+		SET status = 'failed',
+		    finished_at = COALESCE(finished_at, now()),
+		    error = COALESCE(error, 'jarayon uzilib qoldi (server qayta ishga tushdi)'),
+		    updated_at = now()
+		WHERE status = 'running'`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (s *Store) FinishRun(ctx context.Context, id int64, status string,
 	total, created, updated, skipped, failed int, errMsg *string) error {
 
@@ -382,8 +451,13 @@ type PhotoCandidate struct {
 	PhotoURL string
 }
 
-// PeopleNeedingPhoto — manbada rasmi bor, lekin bizda hali yo'q yoki
-// manbadagi URL o'zgargan odamlar.
+// PeopleNeedingPhoto — manbada rasmi bor, lekin bizda hali yo'q, rad
+// etilgan yoki manbadagi URL o'zgargan odamlar.
+//
+// `rejected` ham shu ro'yxatga kiradi: rad etishning ko'p sababi vaqtinchalik
+// (manba URL ochilmadi, HEMIS 502, face-api yarim javob berdi) va bunday odam
+// aks holda hech qachon qayta urinilmay, terminalsiz qolib ketardi. Sababi
+// haqiqatan rasmda bo'lsa keyingi urinish yana rad etadi — zarari yo'q.
 //
 // ⚠️ Rasmi QO'LDA almashtirilganlar (`photo_override_id`) CHIQARIB
 // TASHLANADI. Bunsiz HEMIS oqimi ularni har safar qaytadan yuklab, qo'lda
@@ -396,7 +470,7 @@ func (s *Store) PeopleNeedingPhoto(ctx context.Context, limit int) ([]PhotoCandi
 		WHERE photo_source_url IS NOT NULL AND photo_source_url <> ''
 		  AND photo_override_id IS NULL
 		  AND (photo_path IS NULL
-		       OR photo_status IN ('missing', 'pending')
+		       OR photo_status IN ('missing', 'pending', 'rejected')
 		       OR photo_metrics->>'source_url' IS DISTINCT FROM photo_source_url)
 		ORDER BY id
 		LIMIT $1`, limit)

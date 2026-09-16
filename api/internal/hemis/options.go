@@ -19,6 +19,21 @@ const (
 	clsCitizenship   = "h_citizenship_type"
 	clsAccommodation = "h_accommodation"
 	clsSoato         = "h_soato" // viloyat + tuman bitta ro'yxatda
+
+	// Xodim filtrlari uchun.
+	//
+	// ⚠️ Nomlar maydon nomiga MOS KELMAYDI: `h_staff_position` va
+	// `h_employee_status` degan klassifikator YO'Q — lavozimlar
+	// `h_teacher_position_type` da (233 ta), xodim holati esa
+	// `h_teacher_status` da (11 = Ishlamoqda … 14 = Bo'shagan) yotadi.
+	// Jonli `classifier-list` bo'yicha tekshirilgan (2026-09-16).
+	clsStaffPosition   = "h_teacher_position_type"
+	clsEmployeeStatus  = "h_teacher_status"
+	clsEmploymentForm  = "h_employment_form"
+	clsEmploymentStaff = "h_employment_staff"
+	clsEmployeeType    = "h_employee_type"
+	clsAcademicRank    = "h_academic_rank"
+	clsAcademicDegree  = "h_academic_degree"
 )
 
 // Option — klassifikator qiymati (kod + nom).
@@ -75,7 +90,7 @@ type GroupOption struct {
 	Specialty  int64  `json:"specialty"`
 }
 
-// FilterOptions — talaba filtrlari uchun barcha tanlov ro'yxatlari.
+// FilterOptions — talaba va xodim filtrlari uchun barcha tanlov ro'yxatlari.
 type FilterOptions struct {
 	EducationForm []Option `json:"education_form"`
 	EducationType []Option `json:"education_type"`
@@ -88,6 +103,15 @@ type FilterOptions struct {
 	Citizenship   []Option `json:"citizenship"`
 	Province      []Option `json:"province"`
 	District      []Option `json:"district"`
+
+	// Xodim filtri uchun (jins va bo'lim ro'yxati talabanikiga umumiy).
+	StaffPosition   []Option `json:"staff_position"`
+	EmployeeStatus  []Option `json:"employee_status"`
+	EmploymentForm  []Option `json:"employment_form"`
+	EmploymentStaff []Option `json:"employment_staff"`
+	EmployeeType    []Option `json:"employee_type"`
+	AcademicRank    []Option `json:"academic_rank"`
+	AcademicDegree  []Option `json:"academic_degree"`
 
 	Departments []DepartmentOption `json:"departments"`
 	Specialties []SpecialtyOption  `json:"specialties"`
@@ -116,6 +140,14 @@ func (c *Client) FilterOptions(ctx context.Context) (*FilterOptions, error) {
 		Gender:        classifiers[clsGender],
 		Accommodation: classifiers[clsAccommodation],
 		Citizenship:   classifiers[clsCitizenship],
+
+		StaffPosition:   classifiers[clsStaffPosition],
+		EmployeeStatus:  classifiers[clsEmployeeStatus],
+		EmploymentForm:  classifiers[clsEmploymentForm],
+		EmploymentStaff: classifiers[clsEmploymentStaff],
+		EmployeeType:    classifiers[clsEmployeeType],
+		AcademicRank:    classifiers[clsAcademicRank],
+		AcademicDegree:  classifiers[clsAcademicDegree],
 	}
 	sortByCode(out.EducationForm)
 	sortByCode(out.EducationType)
@@ -126,6 +158,15 @@ func (c *Client) FilterOptions(ctx context.Context) (*FilterOptions, error) {
 	sortByCode(out.Gender)
 	sortByCode(out.Accommodation)
 	sortByCode(out.Citizenship)
+	sortByCode(out.EmployeeStatus)
+	sortByCode(out.EmploymentForm)
+	sortByCode(out.EmploymentStaff)
+	sortByCode(out.EmployeeType)
+	sortByCode(out.AcademicRank)
+	sortByCode(out.AcademicDegree)
+	// ⚠️ Lavozimlar 233 ta — kod bo'yicha emas, NOM bo'yicha saralanadi,
+	// aks holda ro'yxatdan kerakli lavozimni topib bo'lmaydi.
+	sortByName(out.StaffPosition)
 
 	// ⚠️ Viloyat va tuman bitta klassifikatorda (`h_soato`) yotadi:
 	// viloyatda `_parent` o'z kodiga TENG, tumanda esa viloyat kodini

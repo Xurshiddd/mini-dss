@@ -262,10 +262,45 @@ func deviceSourceURL(deviceID *int64, userID string) *string {
 
 // DetachDraft — biriktirishni bekor qiladi (odam HEMIS rasmiga qaytadi).
 func (s *Store) DetachDraft(ctx context.Context, draftID int64) error {
-	_, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var personID *int64
+	if err := tx.QueryRow(ctx,
+		`SELECT person_id FROM photo_drafts WHERE id = $1 FOR UPDATE`, draftID).Scan(&personID); err != nil {
+		return err
+	}
+	if personID != nil {
+		// Faqat shu draftdan yaratilgan terminal rasmi amaldagi override bo'lsa
+		// olib tashlanadi. Keyinroq tanlangan boshqa override'ga tegilmaydi.
+		if _, err := tx.Exec(ctx, `
+			UPDATE people p SET photo_override_id = NULL, updated_at = now()
+			WHERE p.id = $1 AND EXISTS (
+				SELECT 1 FROM person_photos ph
+				JOIN photo_drafts d ON d.id = $2
+				WHERE ph.id = p.photo_override_id
+				  AND ph.source = 'terminal'
+				  AND ph.device_id IS NOT DISTINCT FROM d.device_id
+				  AND ph.source_url = ('device://' || COALESCE(d.device_id::text, '') || '/' || d.user_id)
+			)`, *personID, draftID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE device_person_sync
+			SET state = 'pending', face_synced = false, updated_at = now()
+			WHERE person_id = $1 AND state <> 'removed'`, *personID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `
 		UPDATE photo_drafts SET person_id = NULL, attached_at = NULL, updated_at = now()
-		WHERE id = $1`, draftID)
-	return err
+		WHERE id = $1`, draftID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // DeleteDrafts — qoralamalarni o'chiradi.
@@ -310,21 +345,21 @@ func (s *Store) AutoMatches(ctx context.Context, limit int) ([]DraftMatch, error
 				 OR p.legacy_user_id = d.user_id
 				 OR (norm_name(d.full_name) <> ''
 				     AND norm_name(p.full_name) = norm_name(d.full_name)))
-			LEFT JOIN person_photos op ON op.id = p.photo_override_id
-			WHERE d.person_id IS NULL
-			  AND d.status = 'valid'
-			  AND p.is_active AND NOT p.pending_delete
-			  AND COALESCE(op.status, p.photo_status) <> 'valid'
-		), ranked AS (
+				WHERE d.person_id IS NULL
+				  AND d.status = 'valid'
+				  AND p.is_active AND NOT p.pending_delete
+			), ranked AS (
 			SELECT *,
 			       count(*) FILTER (WHERE by_id) OVER (PARTITION BY draft_id) AS id_hits,
 			       count(*) OVER (PARTITION BY draft_id) AS all_hits
 			FROM cand
 		)
-		SELECT draft_id, person_id, user_id, file_name, full_name
-		FROM ranked
-		WHERE (by_id AND id_hits = 1)
-		   OR (NOT by_id AND id_hits = 0 AND all_hits = 1)
+			SELECT r.draft_id, r.person_id, r.user_id, r.file_name, r.full_name
+			FROM ranked r
+			JOIN people p ON p.id = r.person_id
+			LEFT JOIN person_photos op ON op.id = p.photo_override_id
+			WHERE r.by_id AND r.id_hits = 1
+			  AND COALESCE(op.status, p.photo_status) <> 'valid'
 		ORDER BY draft_id
 		LIMIT $1`, limit)
 	if err != nil {

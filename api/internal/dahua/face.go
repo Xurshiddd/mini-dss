@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -31,6 +33,127 @@ import (
 //
 //	FaceInfoManager.doFind → token  offset count   (kichik), javob `info`
 //	AccessFace.doFind      → Token  Offset Count   (katta), javob `Info`
+
+// ------------------------------------------------------------- yuz YOZISH
+//
+// ⚠️ Yuz yozishning TO'G'RI yo'li — RPC2 `AccessFace`, CGI EMAS. Ilgari bu
+// faqat CGI orqali ketardi ("RPC2 da yuz qo'shish metodi yo'q" degan xulosa
+// `system.listMethod` dan olingan edi — u esa xizmat nomini e'tiborsiz
+// qoldiradi). `AccessFace.listMethod` aksini ko'rsatadi.
+//
+// Jonli terminalda o'lchangan (2026-09-16, ASI7213Y):
+//
+//	CGI  FaceInfoManager.cgi?action=add  → 0.72–0.81 s
+//	RPC2 AccessFace.insertMulti          → 0.44–0.50 s
+//
+// ⚠️ Vaqtdan ham MUHIMROG'I — ULANISHLAR SONI. Qurilma digest challenge'ida
+// ulanishni yopadi (`Connection: close`), shuning uchun HAR BIR CGI so'rovi
+// 3 TA YANGI TCP ulanish ochadi. ~2500 odamdan keyin terminal yangi ulanish
+// qabul qilmay qo'yadi (dial timeout) va SOATLAB o'ziga kelmaydi — sync esa
+// qolganlarning har biriga 10 soniya sarflab, hammasini "failed" qiladi.
+// RPC2 esa bitta sessiya ulanishini qayta ishlatadi.
+//
+// ⚠️ `insertMulti` MAVJUD yuz ustiga yozmaydi — "Batch Process Error"
+// beradi. Almashtirish uchun `updateMulti` (0.29 s).
+//
+// ⚠️ To'da bo'lib yozish deyarli foyda bermaydi: 1 ta → 469 ms/yuz,
+// 4 talik to'da → 402 ms/yuz, 5 talik → 499 ms/yuz. Vaqt tarmoqda emas,
+// qurilmaning yuzdan belgi (feature) ajratishida ketadi. Shu sababli
+// to'da kichik: xato bo'lganda ayirib olish oson bo'lsin.
+
+// FaceUpload — yuklanadigan bitta yuz.
+type FaceUpload struct {
+	UserID string
+	JPEG   []byte
+}
+
+// FaceWriteBatch — bitta `insertMulti` so'roviga nechta yuz.
+const FaceWriteBatch = 4
+
+// InsertFaces — yangi yuzlarni yozadi (`AccessFace.insertMulti`).
+//
+// ⚠️ Parametr nomi `FaceList`. `FaceDataList` (o'qishdagi javob nomi)
+// "Request invalid param!" beradi — yozish va o'qish nomlari har xil.
+func (c *Client) InsertFaces(ctx context.Context, faces []FaceUpload) error {
+	return c.writeFaces(ctx, "AccessFace.insertMulti", faces)
+}
+
+// UpdateFaces — qurilmada ALLAQACHON yuzi borlarni almashtiradi.
+func (c *Client) UpdateFaces(ctx context.Context, faces []FaceUpload) error {
+	return c.writeFaces(ctx, "AccessFace.updateMulti", faces)
+}
+
+// RemoveFaces — yuzlarni UserID bo'yicha o'chiradi (bitta so'rovda).
+func (c *Client) RemoveFaces(ctx context.Context, userIDs []string) error {
+	if len(userIDs) == 0 {
+		return nil
+	}
+	_, err := c.rpc(ctx, "AccessFace.removeMulti", map[string]any{"UserIDList": userIDs}, 0)
+	return err
+}
+
+func (c *Client) writeFaces(ctx context.Context, method string, faces []FaceUpload) error {
+	if len(faces) == 0 {
+		return nil
+	}
+
+	list := make([]map[string]any, 0, len(faces))
+	for _, f := range faces {
+		if !isJPEG(f.JPEG) {
+			return fmt.Errorf("%s: rasm JPEG emas", f.UserID)
+		}
+		list = append(list, map[string]any{
+			"UserID":    f.UserID,
+			"PhotoData": []string{base64.StdEncoding.EncodeToString(f.JPEG)},
+		})
+	}
+
+	_, err := c.rpc(ctx, method, map[string]any{"FaceList": list}, 0)
+	return err
+}
+
+// RateLimited — qurilma yozish sur'atidan shikoyat qilyaptimi.
+//
+// ⚠️ Terminal ketma-ket yozuvda "MAX INSERT RATE EXCEEDED" qaytaradi. Bu
+// yozuvning aybi emas: biroz kutib qayta urinilsa o'tadi. Xato deb
+// belgilansa, odam sync'dan tushib qolardi.
+func RateLimited(err error) bool {
+	return err != nil && strings.Contains(strings.ToUpper(err.Error()), "MAX INSERT RATE")
+}
+
+// RecordMissing — qurilma "bunday yozuv yo'q" deyaptimi ("NO RECORDS").
+//
+// ⚠️ Bazadagi `device_recno` eskirgan bo'lishi mumkin: terminal tozalangan,
+// qayta yuklangan yoki yozuv boshqa yo'l bilan yo'qolgan. Bunday holatda
+// kartani YANGIDAN yozish kerak — aks holda odam har sync'da
+// "RecordUpdater.update: NO RECORDS" bilan abadiy `failed` bo'lib qolardi
+// (jonli terminalda 48 ta odam shunday qolib ketdi).
+func RecordMissing(err error) bool {
+	return err != nil && strings.Contains(strings.ToUpper(err.Error()), "NO RECORDS")
+}
+
+// Unreachable — qurilma umuman javob bermayaptimi (ulanish darajasidagi xato).
+//
+// Bunday xatoda odamni "failed" deb belgilash noto'g'ri — aybdor qurilma.
+func Unreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+
+	msg := err.Error()
+	for _, s := range []string{"dial tcp", "connection refused", "connection reset",
+		"no route to host", "i/o timeout", "EOF", "broken pipe"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
 
 // JPEG boshlanishi — base64 to'g'ri dekodlanganini shundan bilamiz.
 var jpegMagic = []byte{0xFF, 0xD8, 0xFF}

@@ -15,6 +15,7 @@ type DeviceRow = {
 const summary = ref<Summary | null>(null)
 const devices = ref<DeviceRow[]>([])
 const error = ref('')
+const loaded = ref(false)
 
 async function load() {
   try {
@@ -26,6 +27,8 @@ async function load() {
     devices.value = d || []
   } catch (e: any) {
     error.value = e.message
+  } finally {
+    loaded.value = true
   }
 }
 onMounted(load)
@@ -67,7 +70,9 @@ const rejected = computed(() => summary.value?.photo_status?.rejected ?? 0)
       <NuxtLink to="/devices" class="btn sm">Boshqarish</NuxtLink>
     </div>
 
-    <div v-if="!devices.length" class="empty">Hali qurilma qo'shilmagan.</div>
+    <div v-if="!loaded" class="loading-box"><span class="spinner" /> Yuklanmoqda…</div>
+
+    <div v-else-if="!devices.length" class="empty">Hali qurilma qo'shilmagan.</div>
 
     <table v-else>
       <thead>

@@ -16,7 +16,11 @@
 	local_certs
 }
 
-localhost, 172.16.240.70 {
+http://localhost, http://172.16.240.70 {
+	redir https://{host}:{$HTTPS_PORT:6443}{uri} permanent
+}
+
+https://localhost, https://172.16.240.70 {
 	tls internal
 
 	# API — legacy CGI kabi uzun so'rovlar bo'lishi mumkin (rasm yuklash).

@@ -131,9 +131,45 @@ func TestLiveHEMIS(t *testing.T) {
 	}
 	t.Logf("yotoqxonada: %d / %d", exact, total)
 
+	// Xodim filtri: `type` ro'yxatni ikkiga bo'ladi, qolgan filtrlar esa
+	// HEMIS so'rovida bajariladi (talabanikidan farqli).
+	allEmp, err := c.CountEmployees(ctx, EmployeeFilter{})
+	if err != nil {
+		t.Fatalf("CountEmployees: %v", err)
+	}
+	teachers, err := c.CountEmployees(ctx, EmployeeFilter{Type: EmployeeTypeTeacher})
+	if err != nil {
+		t.Fatalf("CountEmployees (o'qituvchi): %v", err)
+	}
+	staff, err := c.CountEmployees(ctx, EmployeeFilter{Type: EmployeeTypeEmployee})
+	if err != nil {
+		t.Fatalf("CountEmployees (xodim): %v", err)
+	}
+	if teachers+staff != allEmp {
+		t.Errorf("teacher (%d) + employee (%d) != all (%d)", teachers, staff, allEmp)
+	}
+
+	dismissed, err := c.CountEmployees(ctx, EmployeeFilter{EmployeeStatus: EmployeeStatusDismissed})
+	if err != nil {
+		t.Fatalf("CountEmployees (bo'shagan): %v", err)
+	}
+	if dismissed == 0 || dismissed >= allEmp {
+		t.Errorf("_employee_status ishlamadi: bo'shagan %d, jami %d", dismissed, allEmp)
+	}
+
 	opts, err := c.FilterOptions(ctx)
 	if err != nil {
 		t.Fatalf("FilterOptions: %v", err)
+	}
+	switch {
+	case len(opts.StaffPosition) == 0:
+		t.Error("lavozimlar bo'sh — `h_teacher_position_type` nomi o'zgargan bo'lishi mumkin")
+	case len(opts.EmployeeStatus) == 0:
+		t.Error("xodim holatlari bo'sh — `h_teacher_status` nomi o'zgargan bo'lishi mumkin")
+	case len(opts.EmployeeType) == 0 || len(opts.EmploymentForm) == 0 ||
+		len(opts.EmploymentStaff) == 0 || len(opts.AcademicRank) == 0 ||
+		len(opts.AcademicDegree) == 0:
+		t.Error("xodim klassifikatorlarining biri bo'sh")
 	}
 	switch {
 	case len(opts.EducationForm) == 0:
@@ -154,4 +190,61 @@ func TestLiveHEMIS(t *testing.T) {
 		len(opts.EducationForm), len(opts.Level), len(opts.Departments),
 		len(opts.Specialties), len(opts.Groups), len(opts.Curricula),
 		len(opts.Province), len(opts.District))
+}
+
+func TestEmployeeFilterValues(t *testing.T) {
+	f := EmployeeFilter{
+		Gender:         "12",
+		EmployeeStatus: "11",
+		StaffPosition:  "13",
+		Department:     8,
+		Search:         " HAMITOV ",
+	}
+
+	got := f.values()
+	want := map[string]string{
+		"type":             "all", // ⚠️ majburiy, bo'sh qoldirilmaydi
+		"_gender":          "12",
+		"_employee_status": "11",
+		"_staff_position":  "13",
+		"_department":      "8",
+		"search":           "HAMITOV",
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("parametrlar soni %d, kutilgan %d: %v", len(got), len(want), got)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, kutilgan %q", k, got[k], v)
+		}
+	}
+
+	if got := (EmployeeFilter{Type: EmployeeTypeTeacher}).values()["type"]; got != "teacher" {
+		t.Errorf("type = %q, kutilgan teacher", got)
+	}
+}
+
+func TestEmployeeFilterValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		filter  EmployeeFilter
+		wantErr bool
+	}{
+		{"bo'sh", EmployeeFilter{}, false},
+		{"o'qituvchilar", EmployeeFilter{Type: EmployeeTypeTeacher}, false},
+		{"noma'lum tur", EmployeeFilter{Type: "students"}, true},
+		{"harfli kod", EmployeeFilter{EmployeeStatus: "abc"}, true},
+		{"manfiy kod", EmployeeFilter{AcademicRank: "-1"}, true},
+		{"yarim passport", EmployeeFilter{PassportPIN: "123"}, true},
+		{"to'liq passport", EmployeeFilter{PassportPIN: "123", PassportNo: "AA1"}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.filter.Validate(); (err != nil) != tt.wantErr {
+				t.Fatalf("Validate() = %v, xato kutilgani: %v", err, tt.wantErr)
+			}
+		})
+	}
 }

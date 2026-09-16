@@ -13,12 +13,15 @@ device-probe/DEVICE-REPORT.md 8.3-band (VideoAnalyseRule[0][0]):
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import numpy as np
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from PIL import Image, ImageOps
 
 MIN_EYE_DISTANCE = int(os.getenv("MIN_EYE_DISTANCE", "60"))
@@ -28,19 +31,49 @@ MAX_PITCH = float(os.getenv("MAX_PITCH", "25"))
 MAX_ROLL = float(os.getenv("MAX_ROLL", "25"))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
 
+
+def _worker_count() -> int:
+    """Nechta rasm bir vaqtda tekshiriladi.
+
+    `INFERENCE_WORKERS` berilmasa yoki 0 bo'lsa — konteynerga ochiq bo'lgan
+    BARCHA yadro. `sched_getaffinity` ishlatiladi: u cpuset chegarasini
+    hisobga oladi, `cpu_count()` esa hostning to'liq sonini beradi.
+
+    ⚠️ Har bir ishchi bitta yadroda ishlashi kutiladi (`OMP_NUM_THREADS=1`).
+    Bunsiz ONNX Runtime har bir so'rov uchun ham yadrolarni bo'lib oladi va
+    ishchilar bir-birini bo'g'adi.
+    """
+    raw = int(os.getenv("INFERENCE_WORKERS", "0") or 0)
+    if raw > 0:
+        return raw
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except AttributeError:  # Linux'dan boshqa tizim
+        return max(1, os.cpu_count() or 1)
+
+
+INFERENCE_WORKERS = _worker_count()
+INFERENCE_QUEUE = max(0, int(os.getenv("INFERENCE_QUEUE", "8")))
+
 app = FastAPI(title="Mini-DSS face validation", version="1.0")
 
 _analyzer = None
+_analyzer_lock = threading.Lock()
+_executor = ThreadPoolExecutor(max_workers=INFERENCE_WORKERS, thread_name_prefix="face-inference")
+_slots = asyncio.Semaphore(INFERENCE_WORKERS + INFERENCE_QUEUE)
 
 
 def get_analyzer():
     """InsightFace modelini birinchi so'rovda yuklaymiz (~300 MB)."""
     global _analyzer
     if _analyzer is None:
-        from insightface.app import FaceAnalysis
+        with _analyzer_lock:
+            if _analyzer is None:
+                from insightface.app import FaceAnalysis
 
-        _analyzer = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-        _analyzer.prepare(ctx_id=-1, det_size=(640, 640))
+                analyzer = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+                analyzer.prepare(ctx_id=-1, det_size=(640, 640))
+                _analyzer = analyzer
     return _analyzer
 
 
@@ -73,6 +106,24 @@ async def validate(file: UploadFile = File(...)) -> dict:
         return Result().fail("empty_file").__dict__
     if len(raw) > MAX_UPLOAD_BYTES:
         return Result().fail("file_too_large").__dict__
+
+    try:
+        await asyncio.wait_for(_slots.acquire(), timeout=0.01)
+    except TimeoutError:
+        raise HTTPException(
+            status_code=503,
+            detail="face validation queue is full",
+            headers={"Retry-After": "2"},
+        )
+
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(_executor, _validate_image, raw)
+    finally:
+        _slots.release()
+
+
+def _validate_image(raw: bytes) -> dict:
 
     try:
         # EXIF orientation'ni qo'llaymiz — telefon rasmlari aks holda yon yotadi.

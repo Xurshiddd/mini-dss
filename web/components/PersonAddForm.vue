@@ -150,9 +150,9 @@ async function save() {
       </label>
 
       <div class="row">
-        <button class="primary" :disabled="busy" @click="save">
-          {{ busy ? 'Saqlanmoqda…' : 'Qo\'shish' }}
-        </button>
+        <BusyButton class="primary" :busy="busy" busy-label="Saqlanmoqda…" @click="save">
+          Qo'shish
+        </BusyButton>
         <button @click="emit('cancel')">Bekor qilish</button>
       </div>
 

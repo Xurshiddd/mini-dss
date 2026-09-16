@@ -65,6 +65,18 @@ function resetCrop() {
 
 // --------------------------------------------------------------------- kamera
 
+const cameraStarting = ref(false)
+
+/** Kamera ruxsati bir necha soniya kutishi mumkin — shu vaqtda spinner. */
+async function startCameraBusy() {
+  cameraStarting.value = true
+  try {
+    await startCamera()
+  } finally {
+    cameraStarting.value = false
+  }
+}
+
 async function startCamera() {
   error.value = ''
   try {
@@ -209,7 +221,10 @@ const handles = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
         Fayldan tanlash
         <input type="file" accept="image/jpeg,image/png,image/webp" hidden @change="loadFile" />
       </label>
-      <button class="pick-btn" @click="startCamera">Kameradan olish</button>
+      <BusyButton class="pick-btn" :busy="cameraStarting" busy-label="Kamera ochilmoqda…"
+                  @click="startCameraBusy">
+        Kameradan olish
+      </BusyButton>
       <button class="pick-btn" @click="emit('cancel')">Bekor qilish</button>
     </div>
 
@@ -268,9 +283,9 @@ const handles = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 
         <div class="spacer" />
         <button @click="back">Orqaga</button>
-        <button class="primary" :disabled="busy" @click="confirm">
-          {{ busy ? 'Tayyorlanmoqda…' : 'Saqlash' }}
-        </button>
+        <BusyButton class="primary" :busy="busy" busy-label="Tayyorlanmoqda…" @click="confirm">
+          Saqlash
+        </BusyButton>
       </div>
 
       <p v-if="tooSmall" class="dim" style="margin: 8px 0 0; font-size: 11.5px">

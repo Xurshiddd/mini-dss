@@ -43,7 +43,16 @@ func main() {
 	}
 	defer st.Close()
 
-	authSvc, err := auth.New(cfg.JWTSecret, cfg.JWTTTL, cfg.AdminUser, cfg.AdminPassword, cfg.EncryptionKey)
+	// Server to'satdan o'chgan bo'lsa (kompyuter qayta yuklandi) sync
+	// loglari `running` bo'lib qotib qoladi — panelda "Ketyapti" bo'lib
+	// ko'rinaveradi. Ishga tushishda ularni yopamiz.
+	if n, err := st.RecoverInterruptedRuns(context.Background()); err != nil {
+		log.Printf("yarim qolgan sync loglari yopilmadi: %v", err)
+	} else if n > 0 {
+		log.Printf("%d ta uzilib qolgan sync logi yopildi", n)
+	}
+
+	authSvc, err := auth.New(cfg.JWTSecret, cfg.JWTTTL, cfg.AdminUser, cfg.AdminPassword, cfg.EncryptionKey, st)
 	if err != nil {
 		log.Fatalf("auth xato: %v", err)
 	}

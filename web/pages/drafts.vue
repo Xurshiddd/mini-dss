@@ -46,7 +46,9 @@ const pullDevice = ref('')
 const pullLimit = ref('')
 const error = ref('')
 const message = ref('')
-const busy = ref(false)
+const attaching = ref(false)
+const loaded = ref(false)
+const busy = useBusy()
 let poll: any = null
 
 const statusPill: Record<string, { label: string; cls: string }> = {
@@ -104,7 +106,7 @@ async function startPull() {
 /** Mos kelganlarni ommaviy biriktirish — avval ko'rib olish (dry run). */
 async function autoAttach(dryRun: boolean) {
   error.value = ''; message.value = ''
-  busy.value = true
+  attaching.value = true
   try {
     const res = await api.post<{ matched: number; attached: number; failed: number }>(
       '/api/drafts/auto-attach', { dry_run: dryRun })
@@ -126,7 +128,7 @@ async function autoAttach(dryRun: boolean) {
   } catch (e: any) {
     error.value = e.message
   } finally {
-    busy.value = false
+    attaching.value = false
   }
 }
 
@@ -245,12 +247,23 @@ const pullPercent = computed(() => {
           <label>Cheklov</label>
           <input v-model="pullLimit" placeholder="hammasi" style="width: 100%" />
         </div>
-        <button class="primary" :disabled="pull?.running" @click="startPull">
+        <BusyButton
+          class="primary"
+          :busy="busy.is('pull')"
+          :disabled="pull?.running"
+          busy-label="Boshlanmoqda…"
+          @click="busy.run('pull', startPull)"
+        >
           {{ pull?.running ? 'Ketyapti…' : 'Yig\'ishni boshlash' }}
-        </button>
-        <button :disabled="busy || !stats?.matched" @click="autoAttach(true)">
+        </BusyButton>
+        <BusyButton
+          :busy="attaching"
+          :disabled="!stats?.matched"
+          busy-label="Biriktirilmoqda…"
+          @click="autoAttach(true)"
+        >
           Mos kelganlarni biriktirish{{ stats?.matched ? ` (${stats.matched})` : '' }}
-        </button>
+        </BusyButton>
       </div>
 
       <div v-if="pull" style="margin-top: 12px">
@@ -301,13 +314,19 @@ const pullPercent = computed(() => {
             <option value="yes">Ha</option>
           </select>
         </div>
-        <button @click="search">Qidirish</button>
+        <BusyButton :busy="busy.is('search')" @click="busy.run('search', search)">
+          Qidirish
+        </BusyButton>
       </div>
     </div>
   </div>
 
   <!-- Ro'yxat -->
-  <div v-if="!drafts.length" class="panel">
+  <div v-if="!loaded" class="panel">
+    <div class="loading-box"><span class="spinner" /> Yuklanmoqda…</div>
+  </div>
+
+  <div v-else-if="!drafts.length" class="panel">
     <div class="empty">
       Qoralama yo'q. Yuqoridagi "Yig'ishni boshlash" tugmasi terminaldagi
       yuzlarni shu yerga olib keladi.
@@ -337,9 +356,14 @@ const pullPercent = computed(() => {
         <div v-if="d.person_id" style="margin-top: 10px">
           <div class="pill ok">Biriktirilgan</div>
           <div style="font-size: 12px; margin-top: 4px">{{ d.person_name }}</div>
-          <button class="sm" style="width: 100%; margin-top: 8px" @click="detach(d)">
+          <BusyButton
+            class="sm"
+            style="width: 100%; margin-top: 8px"
+            :busy="busy.is('detach-' + d.id)"
+            @click="busy.run('detach-' + d.id, () => detach(d))"
+          >
             Bekor qilish
-          </button>
+          </BusyButton>
         </div>
 
         <!-- Taklif -->
@@ -392,9 +416,14 @@ const pullPercent = computed(() => {
           </div>
         </template>
 
-        <button class="sm" style="width: 100%; margin-top: 6px" @click="remove(d)">
+        <BusyButton
+          class="sm"
+          style="width: 100%; margin-top: 6px"
+          :busy="busy.is('remove-' + d.id)"
+          @click="busy.run('remove-' + d.id, () => remove(d))"
+        >
           O'chirish
-        </button>
+        </BusyButton>
       </div>
     </div>
   </div>
@@ -405,8 +434,14 @@ const pullPercent = computed(() => {
         {{ total ? offset + 1 : 0 }}–{{ Math.min(offset + limit, total) }} / {{ total.toLocaleString() }}
       </span>
       <div class="row" style="gap: 6px">
-        <button class="sm" :disabled="offset === 0" @click="page(-1)">Oldingi</button>
-        <button class="sm" :disabled="offset + limit >= total" @click="page(1)">Keyingi</button>
+        <BusyButton class="sm" :busy="busy.is('prev')" :disabled="offset === 0"
+                    @click="busy.run('prev', () => page(-1))">
+          Oldingi
+        </BusyButton>
+        <BusyButton class="sm" :busy="busy.is('next')" :disabled="offset + limit >= total"
+                    @click="busy.run('next', () => page(1))">
+          Keyingi
+        </BusyButton>
       </div>
     </div>
   </div>

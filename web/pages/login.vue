@@ -49,9 +49,15 @@ async function submit() {
                required style="width: 100%" />
       </div>
 
-      <button class="primary" type="submit" :disabled="busy" style="width: 100%; margin-top: 4px">
-        {{ busy ? 'Tekshirilmoqda…' : 'Kirish' }}
-      </button>
+      <BusyButton
+        class="primary"
+        type="submit"
+        :busy="busy"
+        busy-label="Tekshirilmoqda…"
+        style="width: 100%; margin-top: 4px"
+      >
+        Kirish
+      </BusyButton>
     </form>
   </div>
 </template>

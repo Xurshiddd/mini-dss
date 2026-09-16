@@ -26,6 +26,7 @@ export function useAuthToken() {
 export function useApi() {
   const config = useRuntimeConfig()
   const token = useAuthToken()
+  const loading = useLoading()
   const base = config.public.apiBase as string
 
   async function request<T>(path: string, options: any = {}): Promise<T> {
@@ -34,6 +35,7 @@ export function useApi() {
     const jwt = token.get()
     if (jwt) headers.Authorization = `Bearer ${jwt}`
 
+    loading.start()
     try {
       return await $fetch<T>(base + path, { ...options, headers })
     } catch (err: any) {
@@ -43,6 +45,8 @@ export function useApi() {
       }
       // API xatolarni {"error": "..."} shaklida qaytaradi.
       throw new Error(err?.data?.error || err?.message || 'Xato yuz berdi')
+    } finally {
+      loading.stop()
     }
   }
 
@@ -87,24 +91,30 @@ export function useApi() {
      */
     async download(path: string, filename: string): Promise<void> {
       const jwt = token.get()
-      const res = await fetch(base + path, {
-        headers: jwt ? { Authorization: `Bearer ${jwt}` } : {},
-      })
 
-      if (!res.ok) {
-        if (res.status === 401) {
-          token.clear()
-          await navigateTo('/login')
+      loading.start()
+      try {
+        const res = await fetch(base + path, {
+          headers: jwt ? { Authorization: `Bearer ${jwt}` } : {},
+        })
+
+        if (!res.ok) {
+          if (res.status === 401) {
+            token.clear()
+            await navigateTo('/login')
+          }
+          throw new Error(`Yuklab olinmadi (HTTP ${res.status})`)
         }
-        throw new Error(`Yuklab olinmadi (HTTP ${res.status})`)
-      }
 
-      const url = URL.createObjectURL(await res.blob())
-      const link = document.createElement('a')
-      link.href = url
-      link.download = filename
-      link.click()
-      URL.revokeObjectURL(url)
+        const url = URL.createObjectURL(await res.blob())
+        const link = document.createElement('a')
+        link.href = url
+        link.download = filename
+        link.click()
+        URL.revokeObjectURL(url)
+      } finally {
+        loading.stop()
+      }
     },
     blobUrl,
     photoBlob: (personId: number) => blobUrl(`/api/people/${personId}/photo`),

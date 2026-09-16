@@ -32,6 +32,8 @@ const message = ref('')
 const selected = ref<Person | null>(null)
 const checked = ref<Set<number>>(new Set())
 const uploading = ref(false)
+const loaded = ref(false)
+const busy = useBusy()
 const editing = ref(false)
 const showAdd = ref(false)
 const showDeps = ref(false)
@@ -76,6 +78,8 @@ async function load() {
     checked.value = new Set()
   } catch (e: any) {
     error.value = e.message
+  } finally {
+    loaded.value = true
   }
 }
 onMounted(load)
@@ -110,6 +114,45 @@ async function setActive(active: boolean, all = false) {
     })
     message.value = `${res.affected.toLocaleString()} ta yozuv ${active ? 'faollashtirildi' : 'faolsizlantirildi'}.`
     await load()
+  } catch (e: any) {
+    error.value = e.message
+  }
+}
+
+/**
+ * Tanlanganlarni terminalga yuborish.
+ *
+ * Rasmi tekshiruvdan o'tmagan odam yuborilmaydi — buni oldindan aytamiz,
+ * aniq sonini esa server qaytaradi (tanlov sahifadan tashqarida ham
+ * bo'lishi mumkin).
+ */
+const checkedSyncable = computed(() =>
+  people.value.filter((p) =>
+    checked.value.has(p.id) && p.photo_status === 'valid' &&
+    p.is_active && !p.pending_delete).length)
+
+async function pushChecked() {
+  if (checked.value.size === 0) return
+
+  const skipped = checked.value.size - checkedSyncable.value
+  if (!confirm(
+    `${checked.value.size} ta tanlanganlardan ${checkedSyncable.value} tasi ` +
+    `barcha faol terminalga yoziladi.` +
+    (skipped ? `\n\n${skipped} tasi yuborilmaydi: rasmi yaroqli emas, ` +
+               `o'zi nofaol yoki muddati o'tgan.` : '') +
+    `\n\nTerminalda allaqachon bo'lganlarning yuzi qaytadan yoziladi.` +
+    `\n\nDavom etilsinmi?`)) return
+
+  error.value = ''; message.value = ''
+  try {
+    const res = await api.post<{
+      started: number; busy: number; devices: number; people: number; skipped: number
+    }>('/api/sync/selected', { ids: [...checked.value] })
+
+    message.value = `${res.people.toLocaleString()} ta odam ${res.started} ta terminalga yuborilmoqda`
+    if (res.busy) message.value += ` · ${res.busy} ta terminal band edi`
+    if (res.skipped) message.value += ` · ${res.skipped} tasi yaroqsiz (yuborilmadi)`
+    message.value += '. Borishini "Sync" sahifasida kuzating.'
   } catch (e: any) {
     error.value = e.message
   }
@@ -253,7 +296,9 @@ const photoBust = ref(0)
             <option value="missing">Rasm yo'q</option>
           </select>
         </div>
-        <button class="primary" @click="search">Filtrlash</button>
+        <BusyButton class="primary" :busy="busy.is('search')" @click="busy.run('search', search)">
+          Filtrlash
+        </BusyButton>
         <button @click="showAdd = !showAdd">Odam qo'shish</button>
         <button @click="showDeps = !showDeps">Bo'limlar</button>
       </div>
@@ -267,16 +312,44 @@ const photoBust = ref(0)
   <div v-if="checked.size" class="panel">
     <div class="panel-body row" style="align-items: center">
       <strong>{{ checked.size }} ta tanlandi</strong>
-      <button class="sm" @click="setActive(true)">Faollashtirish</button>
-      <button class="sm" @click="setActive(false)">Faolsizlantirish</button>
-      <button class="danger sm" @click="removeChecked()">O'chirish</button>
+      <BusyButton
+        class="primary sm"
+        :busy="busy.is('push')"
+        :disabled="!checkedSyncable"
+        busy-label="Yuborilmoqda…"
+        @click="busy.run('push', pushChecked)"
+      >
+        Terminalga yuborish<template v-if="checkedSyncable"> ({{ checkedSyncable }})</template>
+      </BusyButton>
+      <BusyButton class="sm" :busy="busy.is('on')" @click="busy.run('on', () => setActive(true))">
+        Faollashtirish
+      </BusyButton>
+      <BusyButton class="sm" :busy="busy.is('off')" @click="busy.run('off', () => setActive(false))">
+        Faolsizlantirish
+      </BusyButton>
+      <BusyButton
+        class="danger sm"
+        :busy="busy.is('del')"
+        busy-label="O'chirilmoqda…"
+        @click="busy.run('del', removeChecked)"
+      >
+        O'chirish
+      </BusyButton>
       <div class="spacer" />
-      <button class="sm" @click="setActive(true, true)">
+      <BusyButton
+        class="sm"
+        :busy="busy.is('on-all')"
+        @click="busy.run('on-all', () => setActive(true, true))"
+      >
         Filtrdagi hammasini faollashtirish ({{ total.toLocaleString() }})
-      </button>
-      <button class="danger sm" @click="setActive(false, true)">
+      </BusyButton>
+      <BusyButton
+        class="danger sm"
+        :busy="busy.is('off-all')"
+        @click="busy.run('off-all', () => setActive(false, true))"
+      >
         Filtrdagi hammasini faolsizlantirish
-      </button>
+      </BusyButton>
     </div>
   </div>
 
@@ -290,7 +363,9 @@ const photoBust = ref(0)
         <span class="dim" style="font-weight: 400">{{ total.toLocaleString() }} ta</span>
       </div>
 
-      <div v-if="!people.length" class="empty">Hech narsa topilmadi.</div>
+      <div v-if="!loaded" class="loading-box"><span class="spinner" /> Yuklanmoqda…</div>
+
+      <div v-else-if="!people.length" class="empty">Hech narsa topilmadi.</div>
 
       <table v-else>
         <thead>
@@ -374,8 +449,22 @@ const photoBust = ref(0)
           {{ total ? offset + 1 : 0 }}–{{ Math.min(offset + limit, total) }} / {{ total.toLocaleString() }}
         </span>
         <div class="row" style="gap: 6px">
-          <button class="sm" :disabled="offset === 0" @click="page(-1)">Oldingi</button>
-          <button class="sm" :disabled="offset + limit >= total" @click="page(1)">Keyingi</button>
+          <BusyButton
+            class="sm"
+            :busy="busy.is('prev')"
+            :disabled="offset === 0"
+            @click="busy.run('prev', () => page(-1))"
+          >
+            Oldingi
+          </BusyButton>
+          <BusyButton
+            class="sm"
+            :busy="busy.is('next')"
+            :disabled="offset + limit >= total"
+            @click="busy.run('next', () => page(1))"
+          >
+            Keyingi
+          </BusyButton>
         </div>
       </div>
     </div>
@@ -411,26 +500,29 @@ const photoBust = ref(0)
           {{ selected.photo_reject_reason }}
         </div>
 
-        <button
+        <BusyButton
           v-if="!editing"
           class="primary"
           style="width: 100%; margin-top: 10px"
-          :disabled="uploading"
+          :busy="uploading"
+          busy-label="Tekshirilmoqda…"
           @click="editing = true"
         >
-          {{ uploading ? 'Yuklanmoqda…' : 'Rasmni almashtirish' }}
-        </button>
+          Rasmni almashtirish
+        </BusyButton>
 
         <PhotoEditor v-else @done="saveCropped" @cancel="editing = false" />
 
-        <button
+        <BusyButton
           v-if="!editing && selected.photo_source !== 'hemis'"
           class="sm"
           style="width: 100%; margin-top: 6px"
-          @click="revertPhoto"
+          :busy="busy.is('revert')"
+          busy-label="Qaytarilmoqda…"
+          @click="busy.run('revert', revertPhoto)"
         >
           HEMIS rasmiga qaytarish
-        </button>
+        </BusyButton>
 
         <p class="dim" style="font-size: 11px; margin: 12px 0 0">
           Rasm terminal talablariga tekshiriladi: ko'zlar orasi ≥60px, sifat ≥50,

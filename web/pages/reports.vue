@@ -17,6 +17,22 @@ const rows = ref<DayRow[]>([])
 const loading = ref(false)
 const error = ref('')
 const message = ref('')
+const busy = useBusy()
+
+// Sahifalash ODAM bo'yicha: API tanlangan odamlarning oraliqdagi hamma
+// kunini qaytaradi, shuning uchun haftalik/oylik to'r yarim chiqmaydi.
+const perPageOptions = [10, 20, 30, 40, 50]
+const perPage = ref(20)
+const page = ref(1)
+const total = ref(0)
+
+const pageCount = computed(() => Math.max(1, Math.ceil(total.value / perPage.value)))
+const firstShown = computed(() => (total.value ? (page.value - 1) * perPage.value + 1 : 0))
+const lastShown = computed(() => Math.min(page.value * perPage.value, total.value))
+
+function goTo(p: number) {
+  page.value = Math.min(Math.max(1, p), pageCount.value)
+}
 
 /**
  * Hafta DUSHANBADAN boshlanadi.
@@ -122,15 +138,37 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const res = await api.get<{ rows: DayRow[] }>(
+    const res = await api.get<{ rows: DayRow[]; total: number }>(
       `/api/reports/days?from=${range.value.from}&to=${range.value.to}` +
-      `&q=${encodeURIComponent(query.value)}&limit=5000`)
+      `&q=${encodeURIComponent(query.value)}` +
+      `&limit=${perPage.value}&offset=${(page.value - 1) * perPage.value}`)
     rows.value = res.rows || []
+    total.value = res.total || 0
+
+    // Oxirgi sahifadagi odamlar yo'qolsa (qidiruv toraydi yoki oraliq
+    // o'zgaradi) bo'sh sahifada qolib ketmaylik.
+    if (!rows.value.length && page.value > pageCount.value) {
+      goTo(pageCount.value)
+    }
   } catch (e: any) {
     error.value = e.message
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * Filtr o'zgarganda boshidan ko'rsatamiz.
+ *
+ * Sahifa allaqachon birinchi bo'lsa `load` qo'lda chaqiriladi — aks holda
+ * `page` kuzatuvchisi ishlamay qolardi va jadval yangilanmasdi.
+ */
+function reload() {
+  if (page.value !== 1) {
+    page.value = 1
+    return
+  }
+  load()
 }
 
 // Ekrandagi oraliqni XLSX qilib yuklab beradi.
@@ -170,11 +208,16 @@ function shift(step: number) {
   const d = new Date(anchor.value + 'T00:00:00')
   if (period.value === 'kunlik') d.setDate(d.getDate() + step)
   else if (period.value === 'haftalik') d.setDate(d.getDate() + step * 7)
-  else d.setMonth(d.getMonth() + step)
+  else {
+    // 29–31 sanalarda setMonth overflow qilib bir oyni tashlab ketmasin.
+    d.setDate(1)
+    d.setMonth(d.getMonth() + step)
+  }
   anchor.value = iso(d)
 }
 
-watch([period, anchor], load)
+watch([period, anchor, perPage], reload)
+watch(page, load)
 
 // Hodisalar terminaldan jonli tushadi, shuning uchun bugungi kunni
 // ko'rayotgan bo'lsak sahifa o'zi yangilanib turadi.
@@ -234,22 +277,37 @@ onUnmounted(() => {
 
         <div style="min-width: 200px; flex: 1">
           <label>Qidiruv</label>
-          <input v-model="query" placeholder="Ism yoki UserID" @keyup.enter="load" />
+          <input v-model="query" placeholder="Ism yoki UserID" @keyup.enter="reload" />
         </div>
 
-        <button class="sm" @click="load">Ko'rsatish</button>
+        <BusyButton class="sm" :busy="loading" @click="reload">Ko'rsatish</BusyButton>
         <div class="spacer" />
-        <button class="sm" :disabled="loading || !rows.length" @click="exportXlsx">
+        <BusyButton
+          class="sm"
+          :busy="busy.is('xlsx')"
+          :disabled="loading || !rows.length"
+          busy-label="Tayyorlanmoqda…"
+          @click="busy.run('xlsx', exportXlsx)"
+        >
           XLSX yuklab olish
-        </button>
-        <button class="sm" :disabled="loading" @click="importEvents">
+        </BusyButton>
+        <BusyButton
+          class="sm"
+          :busy="busy.is('import')"
+          :disabled="loading"
+          busy-label="Terminallardan olinmoqda…"
+          @click="busy.run('import', importEvents)"
+        >
           Terminaldan yangilash
-        </button>
+        </BusyButton>
       </div>
 
       <div class="panel-body" style="border-top: 1px solid var(--border-soft); padding-top: 10px">
         <span class="dim">{{ toUz(range.from) }} — {{ toUz(range.to) }}</span>
-        <span class="dim"> · {{ people.length }} odam · {{ rows.length }} kun-yozuv</span>
+        <span class="dim"> · {{ total.toLocaleString() }} odam</span>
+        <span v-if="total" class="dim">
+          · {{ firstShown }}–{{ lastShown }} ko'rsatilmoqda · {{ rows.length }} kun-yozuv
+        </span>
         <span v-if="noExitTotal" class="pill warn" style="margin-left: 8px">
           {{ noExitTotal }} ta chiqishi yozilmagan
         </span>
@@ -264,11 +322,15 @@ onUnmounted(() => {
       <div class="panel-head">
         Kunlik hisobot
         <span class="dim" style="font-weight: 400">{{ toUz(range.from) }}</span>
+        <span v-if="loading && rows.length" class="dim" style="font-weight: 400">
+          <span class="spinner" />yangilanmoqda
+        </span>
       </div>
 
-      <div v-if="!rows.length" class="empty">
-        {{ loading ? 'Yuklanmoqda…' : 'Bu kunda yozuv yo\'q.' }}
+      <div v-if="loading && !rows.length" class="loading-box">
+        <span class="spinner" /> Yuklanmoqda…
       </div>
+      <div v-else-if="!rows.length" class="empty">Bu kunda yozuv yo'q.</div>
 
       <table v-else>
         <thead>
@@ -310,11 +372,15 @@ onUnmounted(() => {
         <span class="dim" style="font-weight: 400">
           {{ toUz(range.from) }} — {{ toUz(range.to) }}
         </span>
+        <span v-if="loading && people.length" class="dim" style="font-weight: 400">
+          <span class="spinner" />yangilanmoqda
+        </span>
       </div>
 
-      <div v-if="!people.length" class="empty">
-        {{ loading ? 'Yuklanmoqda…' : 'Bu oraliqda yozuv yo\'q.' }}
+      <div v-if="loading && !people.length" class="loading-box">
+        <span class="spinner" /> Yuklanmoqda…
       </div>
+      <div v-else-if="!people.length" class="empty">Bu oraliqda yozuv yo'q.</div>
 
       <div v-else style="overflow-x: auto">
         <table>
@@ -365,6 +431,28 @@ onUnmounted(() => {
             </tr>
           </tbody>
         </table>
+      </div>
+    </div>
+    <!-- Sahifalash -->
+    <div v-if="total" class="panel">
+      <div class="panel-body row" style="align-items: center; gap: 10px">
+        <label style="margin: 0" class="dim">Sahifada</label>
+        <select v-model.number="perPage" style="width: 80px">
+          <option v-for="n in perPageOptions" :key="n" :value="n">{{ n }}</option>
+        </select>
+        <span class="dim">ta odam</span>
+
+        <div class="spacer" />
+
+        <button class="sm" :disabled="page <= 1 || loading" @click="goTo(1)">« Boshi</button>
+        <button class="sm" :disabled="page <= 1 || loading" @click="goTo(page - 1)">‹ Oldingi</button>
+        <span class="mono">{{ page }} / {{ pageCount }}</span>
+        <button class="sm" :disabled="page >= pageCount || loading" @click="goTo(page + 1)">
+          Keyingi ›
+        </button>
+        <button class="sm" :disabled="page >= pageCount || loading" @click="goTo(pageCount)">
+          Oxiri »
+        </button>
       </div>
     </div>
   </div>

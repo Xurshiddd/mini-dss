@@ -34,6 +34,20 @@ type API struct {
 	hemisOptions optionsCache
 }
 
+// beginDeviceOperation terminal band bo'lsa barcha endpointlarda bir xil 409 beradi.
+func (a *API) beginDeviceOperation(w http.ResponseWriter, deviceID int64, name string) (func(), bool) {
+	release, err := a.sync.BeginDeviceOperation(deviceID, name)
+	if err != nil {
+		if errors.Is(err, syncsvc.ErrDeviceBusy) {
+			fail(w, http.StatusConflict, err.Error())
+		} else {
+			fail(w, http.StatusInternalServerError, err.Error())
+		}
+		return nil, false
+	}
+	return release, true
+}
+
 func New(cfg config.Config, st *store.Store, a *auth.Service, sy *syncsvc.Service) *API {
 	return &API{
 		cfg: cfg, store: st, auth: a, sync: sy,
@@ -369,6 +383,11 @@ func (a *API) testDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ⛔ Jonli oqim ochiq turganda qurilma yangi ulanish qabul qilmaydi.
+	release, ok := a.beginDeviceOperation(w, id, "device_test")
+	if !ok {
+		return
+	}
+	defer release()
 	resume := a.sync.PauseDevice(id)
 	defer resume()
 
@@ -423,6 +442,11 @@ func (a *API) fixDeviceTime(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ⛔ Jonli oqim ochiq turganda qurilma yangi ulanish qabul qilmaydi.
+	release, ok := a.beginDeviceOperation(w, id, "fix_time")
+	if !ok {
+		return
+	}
+	defer release()
 	resume := a.sync.PauseDevice(id)
 	defer resume()
 
@@ -491,6 +515,11 @@ func (a *API) lookupDeviceUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ⛔ Jonli oqim ochiq turganda qurilma yangi ulanish qabul qilmaydi.
+	release, ok := a.beginDeviceOperation(w, id, "lookup_user")
+	if !ok {
+		return
+	}
+	defer release()
 	resume := a.sync.PauseDevice(id)
 	defer resume()
 
@@ -538,6 +567,11 @@ func (a *API) deviceEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ⛔ Jonli oqim ochiq turganda qurilma yangi ulanish qabul qilmaydi.
+	release, ok := a.beginDeviceOperation(w, id, "device_events")
+	if !ok {
+		return
+	}
+	defer release()
 	resume := a.sync.PauseDevice(id)
 	defer resume()
 
@@ -593,6 +627,11 @@ func (a *API) faceCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ⛔ Jonli oqim ochiq turganda qurilma yangi ulanish qabul qilmaydi.
+	release, ok := a.beginDeviceOperation(w, id, "face_check")
+	if !ok {
+		return
+	}
+	defer release()
 	resume := a.sync.PauseDevice(id)
 	defer resume()
 
@@ -655,6 +694,11 @@ func (a *API) deviceCaps(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ⛔ Jonli oqim ochiq turganda qurilma yangi ulanish qabul qilmaydi.
+	release, ok := a.beginDeviceOperation(w, id, "device_caps")
+	if !ok {
+		return
+	}
+	defer release()
 	resume := a.sync.PauseDevice(id)
 	defer resume()
 
@@ -755,6 +799,10 @@ func (a *API) wipeDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := a.sync.Wipe(r.Context(), id); err != nil {
+		if errors.Is(err, syncsvc.ErrDeviceBusy) {
+			fail(w, http.StatusConflict, err.Error())
+			return
+		}
 		fail(w, http.StatusBadGateway, err.Error())
 		return
 	}

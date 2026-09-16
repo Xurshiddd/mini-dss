@@ -2,3 +2,17 @@
 
 # Terminal parollari bazada shifrlangan, lekin discovery natijalarida
 # shaxsiy ma'lumot bor — device-probe/.gitignore ga qarang.
+
+# Qurilish chiqindilari — repoga tushmasin.
+node_modules/
+web/.nuxt/
+web/.output/
+# ⚠️ Go'ning build keshi va vaqtinchalik katalogi. Odatda ular
+# ~/.cache/go-build da bo'ladi; loyiha ichida paydo bo'lsa — demak
+# go buyruqlari GOCACHE/GOTMPDIR loyihaga yo'naltirilgan holda
+# ishlatilyapti (Codex shunday qiladi). Kodga aloqasi yo'q, xavfsiz
+# o'chiriladi — faqat keyingi build sekinroq bo'ladi.
+api/.tmp-go-cache/
+api/.tmp-go-tmp/
+__pycache__/
+*.pyc

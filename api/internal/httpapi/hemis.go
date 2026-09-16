@@ -30,9 +30,10 @@ const optionsTTL = 30 * time.Minute
 // hemisSyncRequest — POST /api/sync/hemis tanasi. Tana bo'sh bo'lsa:
 // xodim ham, talaba ham, filtrsiz.
 type hemisSyncRequest struct {
-	Employees *bool               `json:"employees"`
-	Students  *bool               `json:"students"`
-	Filter    hemis.StudentFilter `json:"filter"`
+	Employees      *bool                `json:"employees"`
+	Students       *bool                `json:"students"`
+	Filter         hemis.StudentFilter  `json:"filter"`
+	EmployeeFilter hemis.EmployeeFilter `json:"employee_filter"`
 }
 
 func (a *API) startHemisSync(w http.ResponseWriter, r *http.Request) {
@@ -43,14 +44,15 @@ func (a *API) startHemisSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := syncsvc.HemisOptions{
-		Employees: in.Employees == nil || *in.Employees,
-		Students:  in.Students == nil || *in.Students,
-		Filter:    in.Filter,
+		Employees:      in.Employees == nil || *in.Employees,
+		Students:       in.Students == nil || *in.Students,
+		Filter:         in.Filter,
+		EmployeeFilter: in.EmployeeFilter,
 	}
 
 	// Filtr xatosi (harfli kod, yarim passport juftligi) — foydalanuvchi
 	// xatosi, shuning uchun 422.
-	if err := opts.Filter.Validate(); err != nil {
+	if err := opts.Validate(); err != nil {
 		fail(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -147,4 +149,33 @@ func (a *API) hemisStudentCount(w http.ResponseWriter, r *http.Request) {
 		// Mahalliy filtr tanlangan, lekin aniq sanalmagan bo'lsa — taxminiy.
 		"approximate": f.Local() && !exact,
 	})
+}
+
+// hemisEmployeeCount — filtrga nechta xodim tushishini oldindan ko'rsatadi.
+//
+// Talabanikidan farqli o'laroq bu son ANIQ: xodim filtrlarining hammasi
+// HEMIS so'rovida bajariladi, javob ustida saralash yo'q.
+func (a *API) hemisEmployeeCount(w http.ResponseWriter, r *http.Request) {
+	if a.cfg.HemisBase == "" || a.cfg.HemisToken == "" {
+		fail(w, http.StatusServiceUnavailable, "HEMIS sozlanmagan")
+		return
+	}
+
+	var f hemis.EmployeeFilter
+	if err := json.NewDecoder(r.Body).Decode(&f); err != nil && !errors.Is(err, io.EOF) {
+		fail(w, http.StatusBadRequest, "so'rov o'qilmadi")
+		return
+	}
+	if err := f.Validate(); err != nil {
+		fail(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
+	count, err := hemis.New(a.cfg.HemisBase, a.cfg.HemisToken).CountEmployees(r.Context(), f)
+	if err != nil {
+		fail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	write(w, http.StatusOK, map[string]any{"count": count, "approximate": false})
 }

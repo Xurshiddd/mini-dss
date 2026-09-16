@@ -3,6 +3,10 @@ const route = useRoute()
 const token = useAuthToken()
 const { theme, init, toggle } = useTheme()
 
+// Istalgan API so'rovi ketayotganda sahifa ustida ingichka chiziq.
+const { active: apiBusy } = useLoading()
+const busy = useBusy()
+
 onMounted(init)
 
 const nav = [
@@ -31,6 +35,8 @@ async function logout() {
 
 <template>
   <div class="shell">
+    <div v-if="apiBusy" class="loading-bar" />
+
     <aside class="sidebar">
       <div class="brand">Mini<span>DSS</span></div>
 
@@ -58,7 +64,9 @@ async function logout() {
             {{ theme === 'dark' ? '☀' : '🌙' }}
           </button>
           <span class="dim">{{ token.user() }}</span>
-          <button class="sm" @click="logout">Chiqish</button>
+          <BusyButton class="sm" :busy="busy.is('logout')" @click="busy.run('logout', logout)">
+            Chiqish
+          </BusyButton>
         </div>
       </header>
 

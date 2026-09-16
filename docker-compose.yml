@@ -25,6 +25,8 @@ services:
     depends_on:
       - web
       - api
+    environment:
+      HTTPS_PORT: ${HTTPS_PORT:-6443}
     mem_limit: 256m
     restart: unless-stopped
 
@@ -99,8 +101,8 @@ services:
       # O'SHA — nomini o'zgartirmang, aks holda rasmlar yo'qoladi.
       - storage-photos:/data/photos
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     mem_limit: 512m
     restart: unless-stopped
 
@@ -122,9 +124,22 @@ services:
       # Terminal talablari (device-probe/DEVICE-REPORT.md 8.3-band)
       MIN_EYE_DISTANCE: 60
       MIN_QUALITY: 50
-    # InsightFace CPU'ni og'ir yuklaydi — hostni to'liq yeb qo'ymasin.
-    mem_limit: 2g
-    cpus: 2.0
+      # 0 = mashinadagi barcha yadro (konteyner ko'rgan sondan olinadi).
+      INFERENCE_WORKERS: ${INFERENCE_WORKERS:-0}
+      INFERENCE_QUEUE: ${INFERENCE_QUEUE:-8}
+      # ⚠️ Har bir ishchi BITTA yadroda ishlasin: aks holda ONNX Runtime
+      # har bir so'rov uchun o'zi ham yadrolarni bo'lib oladi va 20 ta
+      # ishchi 20×20 ip ochib, bir-birini bo'g'adi (kontekst almashinuvi
+      # foydali ishdan ko'p bo'lib ketadi).
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    # ⚠️ CPU chegarasi ATAYLAB yo'q: InsightFace'ning CPU'dagi tezligi
+    # to'g'ridan-to'g'ri yadro soniga bog'liq. 2 yadro bilan cheklanganda
+    # daqiqasiga ~6 ta rasm tekshirilardi — 3 900 ta qoralama uchun ~9 soat.
+    # Cheklov kerak bo'lsa `.env` da FACE_API_CPUS berilsin.
+    mem_limit: ${FACE_API_MEM:-8g}
+    cpus: ${FACE_API_CPUS:-0}
     restart: unless-stopped
 
   postgres:
@@ -155,6 +170,24 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
+
+  # Versiyalangan migratsiyalar. Mavjud Laravel bazasi 001–011 bilan
+  # baseline qilinadi; keyingi fayllar faqat bir marta bajariladi.
+  migrate:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${DB_DATABASE:-minidss}
+      PGUSER: minidss
+      PGPASSWORD: ${DB_ADMIN_PASSWORD:?DB_ADMIN_PASSWORD .env da berilishi shart}
+    volumes:
+      - ./api/migrations:/migrations:ro
+    command: ["/bin/sh", "/migrations/run.sh"]
+    restart: "no"
 
   # NTP server — terminallarning soatini to'g'rilab turadi.
   #

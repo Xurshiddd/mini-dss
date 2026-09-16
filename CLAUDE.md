@@ -43,8 +43,31 @@ Loyihaning o'z qo'shimchalari:
   qoldiradi va doim `system` ning o'z metodlarini qaytaradi — shu sababli
   `AccessFace.*` "yo'q" deb noto'g'ri xulosa qilingan edi. U BOR:
   `list`, `startFind`/`doFind`/`stopFind`, `insertMulti`, `removeMulti`.
-- **Yozish o'qishdan ancha og'ir.** Ketma-ket yozuvda ~90 so'rovdan keyin
-  qurilma javob bermay qo'yishi mumkin. Oraliq ≥700 ms, backoff bilan.
+- **Yozish o'qishdan ancha og'ir va CGI bilan XAVFLI.** Qurilma digest
+  challenge'ida ulanishni yopadi (`Connection: close`), shuning uchun HAR BIR
+  CGI so'rovi 3 TA yangi TCP ulanish ochadi. ~2500 odamdan keyin terminal
+  yangi ulanish qabul qilmay qo'yadi (dial timeout) va SOATLAB o'ziga
+  kelmaydi — o'lchangan (2026-09-16): 2509 odam yozilgach qolgan 718 tasi
+  2 soat davomida 10 soniyadan "failed" bo'lib chiqdi.
+  Yozish RPC2 orqali ketsin: sessiya ulanishi qayta ishlatiladi.
+- **Qurilma yozish SUR'ATINI cheklaydi:** "MAX INSERT RATE EXCEEDED" — bu
+  yozuvning aybi emas, biroz kutib qayta urinilsa o'tadi.
+- **Yuz YOZISH ham RPC2 da** (jonli terminalda o'lchangan, 2026-09-16):
+
+      AccessFace.insertMulti {FaceList:[{UserID, PhotoData:[b64]}]}  → 0.45 s
+      AccessFace.updateMulti {FaceList:[...]}   mavjud yuz ustiga     → 0.29 s
+      AccessFace.removeMulti {UserIDList:[...]}                       → 0.07 s
+
+  ⚠️ Yozishda parametr `FaceList`, O'QISHDA esa javob `FaceDataList` —
+  yozishga `FaceDataList` berilsa "Request invalid param!" keladi.
+  ⚠️ `insertMulti` MAVJUD yuz ustiga yozmaydi ("Batch Process Error") —
+  almashtirish uchun `updateMulti`.
+  ⚠️ `FaceInfoManager.add` RPC2 da bor, lekin ishlamaydi: foydalanuvchi
+  qurilmada bo'lsa ham `faceInfoManagerErrorUserNotExist` qaytaradi.
+  ⚠️ To'da bo'lib yozish deyarli foyda bermaydi (1 ta → 469 ms/yuz,
+  4 talik to'da → 402 ms/yuz): vaqt tarmoqda emas, qurilmaning yuzdan
+  belgi ajratishida ketadi. Eski CGI yo'li (`FaceInfoManager.cgi?action=add`)
+  0.75 s va yuqoridagi ulanish halokatiga olib keladi.
 - **Yuzni qaytib o'qish RPC2 da, CGI da EMAS.** Jonli terminalda
   tasdiqlangan (2026-09-09):
 

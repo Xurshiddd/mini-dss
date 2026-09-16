@@ -82,6 +82,12 @@ func (s *Service) syncListeners(ctx context.Context) {
 }
 
 func (s *Service) startListener(parent context.Context, deviceID int64) {
+	s.operationsMu.Lock()
+	_, busy := s.operations[deviceID]
+	s.operationsMu.Unlock()
+	if busy {
+		return
+	}
 	ctx, cancel := context.WithCancel(parent)
 	l := &listener{cancel: cancel, done: make(chan struct{}), seen: map[string]time.Time{}}
 
@@ -140,9 +146,16 @@ func (s *Service) listenOnce(ctx context.Context, deviceID int64, l *listener) e
 	}, 0)
 	defer client.Close()
 
-	log.Printf("jonli oqim ochildi: %s (%s)", dev.Name, dev.IP)
+	return client.AttachEvents(ctx, func() {
+		log.Printf("jonli oqim ochildi: %s (%s)", dev.Name, dev.IP)
 
-	return client.AttachEvents(ctx, func(ev dahua.StreamEvent) {
+		// Qurilma tirikligi ISBOTLANDI — paneldagi eski xato yozuvi
+		// tozalanadi. Aks holda bir hafta oldingi xato hamon ko'rinib
+		// turardi va foydalanuvchi "xatolar ko'payib ketdi" deb o'ylardi.
+		if err := s.store.MarkDeviceOnline(ctx, deviceID); err != nil {
+			log.Printf("qurilma %d holati yangilanmadi: %v", deviceID, err)
+		}
+	}, func(ev dahua.StreamEvent) {
 		s.handleEvent(ctx, dev, l, ev)
 	})
 }

@@ -17,6 +17,13 @@ const rows = ref<Row[]>([])
 const message = ref('')
 const error = ref('')
 const editing = ref<Partial<Device> & { password?: string } | null>(null)
+const loaded = ref(false)
+
+// Amal KALITI qurilma id'si bilan: qaysi qatorning tugmasi bosilgan bo'lsa,
+// spinner o'shanda chiqadi.
+const busy = useBusy()
+const key = (action: string, id?: number) => `${action}-${id ?? 0}`
+
 let poll: any = null
 
 const blank = () => ({ name: '', ip: '', port: 80, username: 'admin', password: '',
@@ -27,6 +34,8 @@ async function load() {
     rows.value = (await api.get<Row[]>('/api/devices')) || []
   } catch (e: any) {
     error.value = e.message
+  } finally {
+    loaded.value = true
   }
 }
 
@@ -159,7 +168,9 @@ async function remove(d: Device) {
       <button class="primary sm" @click="editing = blank()">Qurilma qo'shish</button>
     </div>
 
-    <div v-if="!rows.length" class="empty">
+    <div v-if="!loaded" class="loading-box"><span class="spinner" /> Yuklanmoqda…</div>
+
+    <div v-else-if="!rows.length" class="empty">
       Hali qurilma qo'shilmagan. IP va parol shu yerda kiritiladi — bazada shifrlangan holda saqlanadi.
     </div>
 
@@ -230,21 +241,63 @@ async function remove(d: Device) {
 
           <td>
             <div class="row" style="justify-content: flex-end; gap: 6px">
-              <button class="sm" @click="test(row.device)">Tekshirish</button>
-              <button class="sm" @click="fixTime(row.device)">Vaqtni to'g'rilash</button>
-              <button class="primary sm" :disabled="row.progress?.running" @click="sync(row.device)">
+              <BusyButton
+                class="sm"
+                :busy="busy.is(key('test', row.device.id))"
+                busy-label="Tekshirilmoqda…"
+                @click="busy.run(key('test', row.device.id), () => test(row.device))"
+              >
+                Tekshirish
+              </BusyButton>
+              <BusyButton
+                class="sm"
+                :busy="busy.is(key('time', row.device.id))"
+                busy-label="To'g'rilanmoqda…"
+                @click="busy.run(key('time', row.device.id), () => fixTime(row.device))"
+              >
+                Vaqtni to'g'rilash
+              </BusyButton>
+              <BusyButton
+                class="primary sm"
+                :busy="busy.is(key('sync', row.device.id))"
+                :disabled="row.progress?.running"
+                @click="busy.run(key('sync', row.device.id), () => sync(row.device))"
+              >
                 Sync
-              </button>
-              <button v-if="row.stats.failed" class="sm" :disabled="row.progress?.running"
-                      @click="sync(row.device, true)">
+              </BusyButton>
+              <BusyButton
+                v-if="row.stats.failed"
+                class="sm"
+                :busy="busy.is(key('retry', row.device.id))"
+                :disabled="row.progress?.running"
+                @click="busy.run(key('retry', row.device.id), () => sync(row.device, true))"
+              >
                 Xatolarni qayta
-              </button>
+              </BusyButton>
               <button class="sm" @click="editing = { ...row.device, password: '' }">Tahrir</button>
-              <button class="sm" :disabled="row.progress?.running" @click="cleanFaces(row.device)">
+              <BusyButton
+                class="sm"
+                :busy="busy.is(key('faces', row.device.id))"
+                :disabled="row.progress?.running"
+                @click="busy.run(key('faces', row.device.id), () => cleanFaces(row.device))"
+              >
                 Yetim yuzlar
-              </button>
-              <button class="danger sm" @click="wipe(row.device)">Tozalash</button>
-              <button class="danger sm" @click="remove(row.device)">O'chirish</button>
+              </BusyButton>
+              <BusyButton
+                class="danger sm"
+                :busy="busy.is(key('wipe', row.device.id))"
+                busy-label="Tozalanmoqda…"
+                @click="busy.run(key('wipe', row.device.id), () => wipe(row.device))"
+              >
+                Tozalash
+              </BusyButton>
+              <BusyButton
+                class="danger sm"
+                :busy="busy.is(key('remove', row.device.id))"
+                @click="busy.run(key('remove', row.device.id), () => remove(row.device))"
+              >
+                O'chirish
+              </BusyButton>
             </div>
           </td>
         </tr>
@@ -303,7 +356,14 @@ async function remove(d: Device) {
       </label>
 
       <div class="row">
-        <button class="primary" @click="save">{{ editing.id ? 'Saqlash' : 'Qo\'shish' }}</button>
+        <BusyButton
+          class="primary"
+          :busy="busy.is('save')"
+          busy-label="Saqlanmoqda…"
+          @click="busy.run('save', save)"
+        >
+          {{ editing.id ? 'Saqlash' : 'Qo\'shish' }}
+        </BusyButton>
         <button @click="editing = null">Bekor qilish</button>
       </div>
 

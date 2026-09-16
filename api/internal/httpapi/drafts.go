@@ -333,6 +333,11 @@ func (a *API) faceProbe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ⛔ Jonli oqim ochiq turganda qurilma yangi ulanish qabul qilmaydi.
+	release, ok := a.beginDeviceOperation(w, id, "face_probe")
+	if !ok {
+		return
+	}
+	defer release()
 	resume := a.sync.PauseDevice(id)
 	defer resume()
 

@@ -9,6 +9,8 @@ const error = ref('')
 const name = ref('')
 const parentID = ref('')
 
+const busy = useBusy()
+
 async function add() {
   if (!name.value.trim()) return
   error.value = ''
@@ -58,7 +60,10 @@ async function remove(dep: any) {
             </option>
           </select>
         </div>
-        <button class="primary" @click="add">Qo'shish</button>
+        <BusyButton class="primary" :busy="busy.is('add')" busy-label="Qo'shilmoqda…"
+                    @click="busy.run('add', add)">
+          Qo'shish
+        </BusyButton>
       </div>
 
       <div v-if="!props.departments.length" class="dim">
@@ -88,7 +93,13 @@ async function remove(dep: any) {
               </span>
             </td>
             <td style="text-align: right">
-              <button class="danger sm" @click="remove(node.dep)">O'chirish</button>
+              <BusyButton
+                class="danger sm"
+                :busy="busy.is('del-' + node.dep.id)"
+                @click="busy.run('del-' + node.dep.id, () => remove(node.dep))"
+              >
+                O'chirish
+              </BusyButton>
             </td>
           </tr>
         </tbody>

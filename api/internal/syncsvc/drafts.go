@@ -119,6 +119,12 @@ func (s *Service) pullDrafts(faceAPI string, deviceID int64, limit int) {
 		finish(err)
 		return
 	}
+	release, err := s.BeginDeviceOperation(dev.ID, "draft_pull")
+	if err != nil {
+		finish(err)
+		return
+	}
+	defer release()
 
 	runID, _ = s.store.StartRun(ctx, "draft_pull", &dev.ID)
 	s.updateDrafts(func(p *HemisProgress) { p.Stage = dev.Name })
@@ -291,6 +297,11 @@ func (s *Service) pickDevice(ctx context.Context, deviceID int64) (store.Device,
 		}
 
 		func() {
+			release, err := s.BeginDeviceOperation(d.ID, "draft_probe")
+			if err != nil {
+				return
+			}
+			defer release()
 			resume := s.PauseDevice(d.ID)
 			defer resume()
 

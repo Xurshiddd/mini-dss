@@ -156,3 +156,114 @@ func isDigits(s string) bool {
 	}
 	return true
 }
+
+// EmployeeFilter — `employee-list` uchun filtrlar (HEMIS query parametrlari).
+//
+// Talabalarnikidan farqli o'laroq bu yerdagi HAMMA filtr HEMIS tomonida
+// haqiqatan ishlaydi — jonli o'lchangan (2026-09-16): jami 1317,
+// `_gender=12` → 644, `_employee_status=14` → 574, `_department=8` → 43.
+//
+// ⚠️ `type` MAJBURIY parametr. Bo'sh qoldirilsa biz "all" yuboramiz —
+// usiz HEMIS ro'yxatning faqat bir qismini beradi.
+type EmployeeFilter struct {
+	Type            string `json:"type"`             // teacher | employee | all
+	Department      int64  `json:"department"`       // bo'lim id
+	Gender          string `json:"gender"`           // h_gender kodi
+	StaffPosition   string `json:"staff_position"`   // h_teacher_position_type kodi
+	EmployeeStatus  string `json:"employee_status"`  // h_teacher_status kodi
+	EmploymentForm  string `json:"employment_form"`  // h_employment_form kodi
+	EmploymentStaff string `json:"employment_staff"` // h_employment_staff kodi (stavka)
+	EmployeeType    string `json:"employee_type"`    // h_employee_type kodi
+	AcademicRank    string `json:"academic_rank"`    // h_academic_rank kodi
+	AcademicDegree  string `json:"academic_degree"`  // h_academic_degree kodi
+	Search          string `json:"search"`           // ism yoki xodim ID raqami
+	PassportPIN     string `json:"passport_pin"`     // ⚠️ passport_number bilan birga
+	PassportNo      string `json:"passport_number"`
+}
+
+// Xodim ro'yxati turlari (`type` parametri).
+const (
+	EmployeeTypeAll      = "all"
+	EmployeeTypeTeacher  = "teacher"
+	EmployeeTypeEmployee = "employee"
+)
+
+// Validate — filtr qiymatlarini tekshiradi.
+func (f EmployeeFilter) Validate() error {
+	switch f.Type {
+	case "", EmployeeTypeAll, EmployeeTypeTeacher, EmployeeTypeEmployee:
+	default:
+		return fmt.Errorf("xodim turi %q noma'lum (teacher, employee yoki all)", f.Type)
+	}
+
+	codes := map[string]string{
+		"jins":          f.Gender,
+		"lavozim":       f.StaffPosition,
+		"xodim holati":  f.EmployeeStatus,
+		"mehnat shakli": f.EmploymentForm,
+		"stavka":        f.EmploymentStaff,
+		"xodim turi":    f.EmployeeType,
+		"ilmiy unvon":   f.AcademicRank,
+		"ilmiy daraja":  f.AcademicDegree,
+	}
+	if err := validateCodes(codes); err != nil {
+		return err
+	}
+
+	// ⚠️ Talabanikidek: HEMIS ikkalasini birga talab qiladi, bittasi
+	// berilsa filtr jimgina e'tiborsiz qoladi (o'lchangan: faqat
+	// `passport_pin` bilan to'liq ro'yxat qaytdi).
+	if (f.PassportPIN == "") != (f.PassportNo == "") {
+		return fmt.Errorf("passport JSHSHIR va seriya-raqam BIRGA berilishi kerak")
+	}
+
+	return nil
+}
+
+// values — bo'sh bo'lmagan filtrlarni query parametrlariga aylantiradi.
+func (f EmployeeFilter) values() map[string]string {
+	m := map[string]string{"type": EmployeeTypeAll}
+	if t := strings.TrimSpace(f.Type); t != "" {
+		m["type"] = t
+	}
+
+	str := func(key, v string) {
+		if v = strings.TrimSpace(v); v != "" {
+			m[key] = v
+		}
+	}
+
+	str("_gender", f.Gender)
+	str("_staff_position", f.StaffPosition)
+	str("_employee_status", f.EmployeeStatus)
+	str("_employment_form", f.EmploymentForm)
+	str("_employment_staff", f.EmploymentStaff)
+	str("_employee_type", f.EmployeeType)
+	str("_academic_rank", f.AcademicRank)
+	str("_academic_degree", f.AcademicDegree)
+	str("search", f.Search)
+	str("passport_pin", f.PassportPIN)
+	str("passport_number", f.PassportNo)
+
+	if f.Department > 0 {
+		m["_department"] = strconv.FormatInt(f.Department, 10)
+	}
+
+	return m
+}
+
+// validateCodes — klassifikator kodlari faqat raqamdan iboratmi.
+//
+// ⚠️ Raqam kutilgan joyga harf yuborilsa HEMIS talaba ro'yxatida 500
+// qaytaradi (400 emas) — shuning uchun xato bizda, so'rovdan OLDIN tutiladi.
+func validateCodes(codes map[string]string) error {
+	for name, v := range codes {
+		if v == "" {
+			continue
+		}
+		if !isDigits(v) {
+			return fmt.Errorf("%s kodi faqat raqamdan iborat bo'lishi kerak (%q)", name, v)
+		}
+	}
+	return nil
+}

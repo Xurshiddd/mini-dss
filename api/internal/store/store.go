@@ -139,6 +139,20 @@ func (s *Store) MarkDeviceSeen(ctx context.Context, id int64, ident map[string]s
 	return err
 }
 
+// MarkDeviceOnline — qurilma AYNI PAYTDA javob berayotganini belgilaydi va
+// eski xato yozuvini tozalaydi.
+//
+// ⚠️ `MarkDeviceSeen` dan farqi: model/firmware so'ralmaydi, ya'ni qurilmaga
+// qo'shimcha so'rov ketmaydi. Jonli hodisa oqimi ochilganda aynan shu ma'lum
+// bo'ladi — terminal tirik. Bunsiz panelda bir haftalik eski xato turaverar
+// edi: `last_error` faqat sync yoki "Tekshirish" tugmasi orqali tozalanardi.
+func (s *Store) MarkDeviceOnline(ctx context.Context, id int64) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE devices SET last_seen_at = now(), last_error = NULL, updated_at = now()
+		WHERE id = $1`, id)
+	return err
+}
+
 func (s *Store) MarkDeviceError(ctx context.Context, id int64, msg string) {
 	_, _ = s.pool.Exec(ctx,
 		`UPDATE devices SET last_error = $2, updated_at = now() WHERE id = $1`, id, msg)
@@ -179,6 +193,12 @@ type Person struct {
 	// Shu qurilmadagi RecNo — faqat PeopleToSync to'ldiradi.
 	// Bo'sh bo'lmasa odam qurilmada allaqachon bor: qayta qo'shilmaydi.
 	DeviceRecNo *int `json:"-"`
+	// Shu qurilmada yuzi bormi — yozish yo'lini tanlash uchun
+	// (`insertMulti` mavjud yuz ustiga yozmaydi, `updateMulti` yozadi).
+	DeviceFaceSynced bool `json:"-"`
+	// Qurilmaga oxirgi yozilgan va hozir kerak bo'lgan karta ma'lumoti hash'i.
+	DeviceUserHash  string `json:"-"`
+	DesiredUserHash string `json:"-"`
 }
 
 type PeopleFilter struct {
@@ -305,38 +325,53 @@ const studentDuplicate = `(p.source = 'hemis_student' AND EXISTS (
 		  AND e.is_active AND NOT e.pending_delete AND e.photo_status = 'valid'
 		  AND norm_name(e.full_name) = norm_name(p.full_name)))`
 
-// PeopleToSync — qurilmaga yozilishi kerak bo'lganlar.
+// syncablePerson — terminalga yuborish MUMKIN bo'lgan odam sharti.
 //
-// Faqat rasmi tekshiruvdan o'tganlar: yuzsiz foydalanuvchi terminalda hech
-// kimni kiritmaydi, ya'ni foydasiz yozuv bo'ladi.
+// Qurilmaga bog'liq emas: faol, o'chirishga belgilanmagan, muddati
+// o'tmagan va rasmi tekshiruvdan o'tgan. Yuzsiz foydalanuvchi terminalda
+// hech kimni kiritmaydi, ya'ni foydasiz yozuv bo'ladi.
+const syncablePerson = `p.is_active AND NOT p.pending_delete
+		  AND ` + effectivePhotoStatus + ` = 'valid'
+		  AND (p.valid_to IS NULL OR p.valid_to >= CURRENT_DATE)
+		  AND NOT ` + studentDuplicate
+
+// peopleToSyncSelect — sync uchun odam qatorlari. `$1` — qurilma id'si.
+//
+// ⚠️ Rasm AMALDAGISI olinadi: qo'lda almashtirilgan yoki terminaldan
+// biriktirilgan rasm bo'lsa, terminalga AYNAN SHU ketadi. HEMIS rasmi
+// rad etilgan bo'lsa ham, almashtirilgani yaroqli bo'lsa odam sync
+// bo'ladi — buning uchun ham holat, ham yo'l override'dan olinadi.
+const peopleToSyncSelect = `
+		SELECT p.id, p.user_id, p.legacy_user_id, p.full_name, p.source,
+		       ` + effectivePhotoPath + `, ` + effectivePhotoStatus + `, ` + effectivePhotoReason + `,
+		       ` + effectivePhotoSource + `,
+		       p.valid_from, p.valid_to, p.is_active,
+		       p.person_type, p.department_id, NULL, p.gender, p.status, p.access_status,
+		       p.staff_position, p.specialty, p.student_group, p.level_name, 0,
+		       (SELECT d.device_recno FROM device_person_sync d
+		         WHERE d.person_id = p.id AND d.device_id = $1),
+			       COALESCE((SELECT d.face_synced FROM device_person_sync d
+			         WHERE d.person_id = p.id AND d.device_id = $1), false),
+			       COALESCE((SELECT d.user_hash FROM device_person_sync d
+			         WHERE d.person_id = p.id AND d.device_id = $1), ''),
+			       md5(concat_ws(chr(31), p.full_name,
+			         COALESCE(p.valid_from::text, ''), COALESCE(p.valid_to::text, '')))
+		FROM people p
+		` + overridePhotoJoin + `
+		WHERE ` + syncablePerson + ` AND `
+
+// PeopleToSync — qurilmaga yozilishi kerak bo'lganlar.
 func (s *Store) PeopleToSync(ctx context.Context, deviceID int64, retryFailed bool, limit int) ([]Person, error) {
 	condition := `NOT EXISTS (SELECT 1 FROM device_person_sync d
-		WHERE d.person_id = p.id AND d.device_id = $1 AND d.state = 'synced')`
+			WHERE d.person_id = p.id AND d.device_id = $1 AND d.state = 'synced'
+			  AND d.user_hash IS NOT DISTINCT FROM md5(concat_ws(chr(31), p.full_name,
+			      COALESCE(p.valid_from::text, ''), COALESCE(p.valid_to::text, ''))))`
 	if retryFailed {
 		condition = `EXISTS (SELECT 1 FROM device_person_sync d
 			WHERE d.person_id = p.id AND d.device_id = $1 AND d.state = 'failed')`
 	}
 
-	// ⚠️ Rasm AMALDAGISI olinadi: qo'lda almashtirilgan yoki terminaldan
-	// biriktirilgan rasm bo'lsa, terminalga AYNAN SHU ketadi. HEMIS rasmi
-	// rad etilgan bo'lsa ham, almashtirilgani yaroqli bo'lsa odam sync
-	// bo'ladi — buning uchun ham holat, ham yo'l override'dan olinadi.
-	rows, err := s.pool.Query(ctx, `
-		SELECT p.id, p.user_id, p.legacy_user_id, p.full_name, p.source,
-		       `+effectivePhotoPath+`, `+effectivePhotoStatus+`, `+effectivePhotoReason+`,
-		       `+effectivePhotoSource+`,
-		       p.valid_from, p.valid_to, p.is_active,
-		       p.person_type, p.department_id, NULL, p.gender, p.status, p.access_status,
-		       p.staff_position, p.specialty, p.student_group, p.level_name, 0,
-		       (SELECT d.device_recno FROM device_person_sync d
-		         WHERE d.person_id = p.id AND d.device_id = $1)
-		FROM people p
-		`+overridePhotoJoin+`
-		WHERE p.is_active AND NOT p.pending_delete
-		  AND `+effectivePhotoStatus+` = 'valid'
-		  AND (p.valid_to IS NULL OR p.valid_to >= CURRENT_DATE)
-		  AND NOT `+studentDuplicate+`
-		  AND `+condition+`
+	rows, err := s.pool.Query(ctx, peopleToSyncSelect+condition+`
 		ORDER BY p.id
 		LIMIT $2`, deviceID, limit)
 	if err != nil {
@@ -344,6 +379,63 @@ func (s *Store) PeopleToSync(ctx context.Context, deviceID int64, retryFailed bo
 	}
 	defer rows.Close()
 
+	return scanSyncPeople(rows)
+}
+
+// PeopleToSyncSelected — TANLANGAN odamlardan qurilmaga yuborilishi
+// mumkin bo'lganlari.
+//
+// `PeopleToSync` dan farqi: allaqachon yozilganlar ham qaytariladi. Odam
+// ataylab tanlangan ("shuni yubor") — u qurilmada bo'lsa yuzi qaytadan
+// yoziladi, bo'lmasa qo'shiladi. Yaroqlilik shartlari esa BIR XIL.
+func (s *Store) PeopleToSyncSelected(ctx context.Context, deviceID int64, ids []int64) ([]Person, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	rows, err := s.pool.Query(ctx, peopleToSyncSelect+`p.id = ANY($2)
+		ORDER BY p.id`, deviceID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanSyncPeople(rows)
+}
+
+// SyncableIDs — tanlanganlardan terminalga yuborsa bo'ladiganlari.
+//
+// Qurilmaga tegmasdan oldin tekshirish uchun: panel "nechtasi rasmi
+// yaroqsizligi uchun yuborilmadi" deb aytsin.
+func (s *Store) SyncableIDs(ctx context.Context, ids []int64) ([]int64, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT p.id
+		FROM people p
+		`+overridePhotoJoin+`
+		WHERE `+syncablePerson+`
+		  AND p.id = ANY($1)
+		ORDER BY p.id`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+func scanSyncPeople(rows pgx.Rows) ([]Person, error) {
 	var out []Person
 	for rows.Next() {
 		var p Person
@@ -352,7 +444,8 @@ func (s *Store) PeopleToSync(ctx context.Context, deviceID int64, retryFailed bo
 			&p.ValidFrom, &p.ValidTo, &p.IsActive,
 			&p.PersonType, &p.DepartmentID, &p.DepartmentName, &p.Gender, &p.Status, &p.AccessStatus,
 			&p.StaffPosition, &p.Specialty, &p.StudentGroup, &p.LevelName,
-			&p.SyncedOn, &p.DeviceRecNo); err != nil {
+			&p.SyncedOn, &p.DeviceRecNo, &p.DeviceFaceSynced,
+			&p.DeviceUserHash, &p.DesiredUserHash); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -393,7 +486,8 @@ func (s *Store) PeopleToRemove(ctx context.Context, deviceID int64, limit int) (
 		FROM device_person_sync d
 		JOIN people p ON p.id = d.person_id
 		WHERE d.device_id = $1
-		  AND d.state = 'synced'
+			  AND d.state <> 'removed'
+			  AND d.device_recno IS NOT NULL
 		  AND (NOT p.is_active
 		       OR p.pending_delete
 		       OR (p.valid_to IS NOT NULL AND p.valid_to < CURRENT_DATE)
@@ -483,22 +577,24 @@ func (s *Store) PendingDeleteCount(ctx context.Context) (int, error) {
 // ------------------------------------------------------------- sync holatlari
 
 func (s *Store) SaveSyncState(ctx context.Context, deviceID, personID int64,
-	state string, recNo *int, faceSynced bool, errMsg *string) error {
+	state string, recNo *int, faceSynced bool, userHash string, errMsg *string) error {
 
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO device_person_sync
 			(device_id, person_id, state, device_recno, face_synced, last_error,
-			 attempts, synced_at, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6, 1, now(), now(), now())
+				 user_hash, attempts, synced_at, created_at, updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7, 1, now(), now(), now())
 		ON CONFLICT (device_id, person_id) DO UPDATE SET
 			state = EXCLUDED.state,
 			device_recno = COALESCE(EXCLUDED.device_recno, device_person_sync.device_recno),
-			face_synced = EXCLUDED.face_synced,
+				face_synced = EXCLUDED.face_synced,
+				user_hash = CASE WHEN EXCLUDED.user_hash = ''
+				    THEN device_person_sync.user_hash ELSE EXCLUDED.user_hash END,
 			last_error = EXCLUDED.last_error,
 			attempts = device_person_sync.attempts + 1,
 			synced_at = now(),
 			updated_at = now()`,
-		deviceID, personID, state, recNo, faceSynced, errMsg)
+		deviceID, personID, state, recNo, faceSynced, errMsg, userHash)
 	return err
 }
 

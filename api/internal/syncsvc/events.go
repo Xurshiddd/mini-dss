@@ -21,6 +21,11 @@ func (s *Service) ImportEvents(ctx context.Context, deviceID int64, maxPages int
 	if maxPages <= 0 {
 		maxPages = 5
 	}
+	release, err := s.BeginDeviceOperation(deviceID, "import_events")
+	if err != nil {
+		return 0, err
+	}
+	defer release()
 
 	// ⛔ Jonli oqim ochiq turganda qurilma yangi ulanish qabul qilmaydi.
 	resume := s.PauseDevice(deviceID)

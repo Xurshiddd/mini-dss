@@ -21,12 +21,21 @@ import (
 
 // HemisOptions — sync nimani va qanday filtr bilan tortishini belgilaydi.
 //
-// Filtrlar faqat TALABAGA tegishli: HEMIS `employee-list` da bunday
-// parametrlar yo'q.
+// Xodim va talaba filtrlari AYRIM: HEMIS'da ikki ro'yxatning parametrlari
+// ham, klassifikatorlari ham bir-biriga to'g'ri kelmaydi.
 type HemisOptions struct {
-	Employees bool                `json:"employees"`
-	Students  bool                `json:"students"`
-	Filter    hemis.StudentFilter `json:"filter"`
+	Employees      bool                 `json:"employees"`
+	Students       bool                 `json:"students"`
+	Filter         hemis.StudentFilter  `json:"filter"`
+	EmployeeFilter hemis.EmployeeFilter `json:"employee_filter"`
+}
+
+// Validate — ikkala filtrni ham tekshiradi.
+func (o HemisOptions) Validate() error {
+	if err := o.Filter.Validate(); err != nil {
+		return err
+	}
+	return o.EmployeeFilter.Validate()
 }
 
 type HemisProgress struct {
@@ -64,7 +73,7 @@ func (s *Service) StartHemisSync(base, token string, opts HemisOptions) error {
 	if !opts.Employees && !opts.Students {
 		return fmt.Errorf("na xodim, na talaba tanlanmagan — tortadigan narsa yo'q")
 	}
-	if err := opts.Filter.Validate(); err != nil {
+	if err := opts.Validate(); err != nil {
 		return err
 	}
 
@@ -103,6 +112,15 @@ func (s *Service) runHemis(base, token string, opts HemisOptions) {
 	client := hemis.New(base, token)
 
 	var total, created, updated, skipped, failed, deactivated int
+	pending := make([]store.PersonInput, 0, 200)
+	flushPeople := func() {
+		c, u, f := s.store.UpsertPeopleBatch(ctx, pending)
+		created, updated, failed = created+c, updated+u, failed+f
+		pending = pending[:0]
+		s.updateHemis(func(p *HemisProgress) {
+			p.Total, p.Created, p.Updated, p.Skipped, p.Failed = total, created, updated, skipped, failed
+		})
+	}
 
 	finish := func(err error) {
 		now := time.Now()
@@ -133,7 +151,7 @@ func (s *Service) runHemis(base, token string, opts HemisOptions) {
 	// tayanadi. Xato bo'lsa ham to'xtamaymiz: son bo'lmasa bar ko'rsatilmaydi.
 	expected := 0
 	if opts.Employees {
-		if n, cErr := client.CountEmployees(ctx); cErr == nil {
+		if n, cErr := client.CountEmployees(ctx, opts.EmployeeFilter); cErr == nil {
 			expected += n
 		}
 	}
@@ -148,7 +166,7 @@ func (s *Service) runHemis(base, token string, opts HemisOptions) {
 	var err error
 
 	if opts.Employees {
-		err = client.EachEmployee(ctx, func(e hemis.Employee) error {
+		err = client.EachEmployee(ctx, opts.EmployeeFilter, func(e hemis.Employee) error {
 			total++
 
 			if e.IDNumber == "" {
@@ -172,7 +190,7 @@ func (s *Service) runHemis(base, token string, opts HemisOptions) {
 
 			depID := s.saveDepartment(ctx, e.Department)
 
-			_, isNew, err := s.store.UpsertPerson(ctx, store.PersonInput{
+			pending = append(pending, store.PersonInput{
 				ExternalID:    strPtr(fmt.Sprint(e.ID)),
 				Source:        "hemis_employee",
 				PersonType:    "employee",
@@ -186,22 +204,12 @@ func (s *Service) runHemis(base, token string, opts HemisOptions) {
 				PhotoURL:      e.Image,
 				IsActive:      e.Active,
 			})
-			if err != nil {
-				failed++
-				return nil // bitta yozuv butun sync'ni to'xtatmasin
+			if len(pending) == cap(pending) {
+				flushPeople()
 			}
-
-			if isNew {
-				created++
-			} else {
-				updated++
-			}
-
-			s.updateHemis(func(p *HemisProgress) {
-				p.Total, p.Created, p.Updated, p.Skipped, p.Failed = total, created, updated, skipped, failed
-			})
 			return nil
 		})
+		flushPeople()
 	}
 
 	if err != nil {
@@ -235,7 +243,7 @@ func (s *Service) runHemis(base, token string, opts HemisOptions) {
 			group = strPtr(st.Group.Name)
 		}
 
-		_, isNew, err := s.store.UpsertPerson(ctx, store.PersonInput{
+		pending = append(pending, store.PersonInput{
 			ExternalID:    strPtr(fmt.Sprint(st.ID)),
 			Source:        "hemis_student",
 			PersonType:    "student",
@@ -255,22 +263,12 @@ func (s *Service) runHemis(base, token string, opts HemisOptions) {
 			// Talabada `active` maydoni yo'q — holati "O'qimoqda" bo'lsa faol.
 			IsActive: st.StudentStatus.Code == "11",
 		})
-		if err != nil {
-			failed++
-			return nil
+		if len(pending) == cap(pending) {
+			flushPeople()
 		}
-
-		if isNew {
-			created++
-		} else {
-			updated++
-		}
-
-		s.updateHemis(func(p *HemisProgress) {
-			p.Total, p.Created, p.Updated, p.Skipped, p.Failed = total, created, updated, skipped, failed
-		})
 		return nil
 	})
+	flushPeople()
 
 	// Bo'limlar daraxtini tiklaymiz — ota bo'lim keyinroq kelgan bo'lishi mumkin.
 	if n, relinkErr := s.store.RelinkDepartments(ctx); relinkErr == nil && n > 0 {

@@ -30,7 +30,10 @@ const devices = ref<DeviceRow[]>([])
 const runs = ref<Run[]>([])
 const message = ref('')
 const error = ref('')
+const busy = useBusy()
 let poll: any = null
+
+const loaded = ref(false)
 
 async function load() {
   try {
@@ -47,6 +50,8 @@ async function load() {
     runs.value = r || []
   } catch (e: any) {
     error.value = e.message
+  } finally {
+    loaded.value = true
   }
 }
 
@@ -63,17 +68,11 @@ onUnmounted(() => clearInterval(poll))
 async function runHemis() {
   error.value = ''; message.value = ''
   try {
-    // Bo'sh maydonlar yuborilmaydi — HEMIS ularni baribir e'tiborsiz
-    // qoldiradi, lekin logda filtr toza ko'rinsin.
-    const filter: Record<string, string | number> = {}
-    for (const [k, v] of Object.entries(syncOptions.value.filter)) {
-      if (v !== '' && v !== 0) filter[k] = v
-    }
-
     await api.post('/api/sync/hemis', {
       employees: syncOptions.value.employees,
       students: syncOptions.value.students,
-      filter,
+      filter: compactFilter(syncOptions.value.filter),
+      employee_filter: compactFilter(syncOptions.value.employee_filter),
     })
     message.value = 'HEMIS sync boshlandi.'
     await load()
@@ -132,9 +131,15 @@ const totalPending = computed(() =>
         <button class="sm" :disabled="!hemisConfigured" @click="showFilter = !showFilter">
           {{ showFilter ? 'Filtrni yopish' : 'Filtr' }}
         </button>
-        <button class="primary sm" :disabled="hemis?.running || !hemisConfigured" @click="runHemis">
+        <BusyButton
+          class="primary sm"
+          :busy="busy.is('hemis')"
+          :disabled="hemis?.running || !hemisConfigured"
+          busy-label="Boshlanmoqda…"
+          @click="busy.run('hemis', runHemis)"
+        >
           {{ hemis?.running ? 'Ketyapti…' : 'Boshlash' }}
-        </button>
+        </BusyButton>
       </div>
       <div class="panel-body">
         <p class="dim" style="margin-top: 0">
@@ -193,15 +198,26 @@ const totalPending = computed(() =>
     <div class="panel">
       <div class="panel-head">
         2 · Rasmlarni yuklash
-        <button class="primary sm" :disabled="photos?.running" @click="runPhotos">
+        <BusyButton
+          class="primary sm"
+          :busy="busy.is('photos')"
+          :disabled="photos?.running"
+          busy-label="Boshlanmoqda…"
+          @click="busy.run('photos', runPhotos)"
+        >
           {{ photos?.running ? 'Ketyapti…' : 'Boshlash' }}
-        </button>
+        </BusyButton>
       </div>
       <div class="panel-body">
         <p class="dim" style="margin-top: 0">
           HEMIS'dagi rasmlar yuklab olinadi va terminal talablariga tekshiriladi
           (ko'zlar orasi ≥60px, sifat ≥50, bitta yuz). Rasmsiz odam terminalga
           yuborilmaydi.
+        </p>
+        <p class="dim" style="margin-top: 6px">
+          Rad etilganlar har safar QAYTA urinib ko'riladi — rad etish ko'pincha
+          vaqtinchalik (manba ochilmadi, servis javob bermadi). Rasmi qo'lda
+          qo'yilganlarga tegilmaydi.
         </p>
 
         <template v-if="photos">
@@ -239,9 +255,15 @@ const totalPending = computed(() =>
     <div class="panel">
       <div class="panel-head">
         3 · Platforma → terminallar
-        <button class="primary sm" :disabled="devices.some((d) => d.progress?.running)" @click="runDevices">
+        <BusyButton
+          class="primary sm"
+          :busy="busy.is('devices')"
+          :disabled="devices.some((d) => d.progress?.running)"
+          busy-label="Boshlanmoqda…"
+          @click="busy.run('devices', runDevices)"
+        >
           Hammasini sync qilish
-        </button>
+        </BusyButton>
       </div>
       <div class="panel-body">
         <p class="dim" style="margin-top: 0">
@@ -305,12 +327,15 @@ const totalPending = computed(() =>
   <div class="panel">
     <div class="panel-head">
       Sync tarixi
-      <button class="sm" @click="load">Yangilash</button>
+      <BusyButton class="sm" :busy="busy.is('load')" @click="busy.run('load', load)">
+        Yangilash
+      </BusyButton>
     </div>
 
-    <div v-if="!runs.length" class="empty">Hali sync bo'lmagan.</div>
+    <div v-if="!loaded" class="loading-box"><span class="spinner" /> Yuklanmoqda…</div>
+    <div v-else-if="!runs.length" class="empty">Hali sync bo'lmagan.</div>
 
-    <table v-else>
+    <table v-else-if="runs.length">
       <thead>
         <tr>
           <th>Boshlandi</th>

@@ -171,14 +171,15 @@ onMounted(load)
         <div class="panel-head row" style="justify-content: space-between; align-items: center">
           <span>Kunlik davomat</span>
           <div class="row" style="gap: 6px; align-items: center">
-            <button class="sm" @click="shiftDay(-1)">‹</button>
+            <button class="sm" :disabled="loading" @click="shiftDay(-1)">‹</button>
             <div style="width: 140px"><DateInput v-model="day" /></div>
-            <button class="sm" @click="shiftDay(1)">›</button>
+            <button class="sm" :disabled="loading" @click="shiftDay(1)">›</button>
+            <span v-if="loading" class="spinner" style="margin-left: 2px" />
           </div>
         </div>
 
         <div class="panel-body">
-          <div v-if="loading" class="dim">Yuklanmoqda…</div>
+          <div v-if="loading" class="loading-box"><span class="spinner" /> Yuklanmoqda…</div>
           <div v-else-if="!today" class="dim">Bu kunda yozuv yo'q.</div>
 
           <div v-else class="row" style="gap: 30px; flex-wrap: wrap; align-items: center">

@@ -38,7 +38,9 @@ type StreamEvent struct {
 // ⚠️ Bir odam bir necha soniya ichida bir necha marta hodisa hosil qiladi
 // (o'lchangan: 21 soniyada 4 marta). Takrorlarni chaqiruvchi tomon
 // filtrlaydi.
-func (c *Client) AttachEvents(ctx context.Context, onEvent func(StreamEvent)) error {
+// `onOpen` oqim HAQIQATAN ochilganda bir marta chaqiriladi (nil bo'lishi
+// mumkin) — "ulanmoqda" bilan "ulandi" ni ajratish uchun.
+func (c *Client) AttachEvents(ctx context.Context, onOpen func(), onEvent func(StreamEvent)) error {
 	// ⚠️ `[` va `]` xom holda qolishi kerak — %5B%5D ni qurilma qabul
 	// qilmaydi (cgi() dagi bilan bir xil sabab).
 	target := c.dev.baseURL() +
@@ -53,6 +55,10 @@ func (c *Client) AttachEvents(ctx context.Context, onEvent func(StreamEvent)) er
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("oqim ochilmadi: HTTP %d", resp.StatusCode)
+	}
+
+	if onOpen != nil {
+		onOpen()
 	}
 
 	reader := bufio.NewReaderSize(resp.Body, 64*1024)

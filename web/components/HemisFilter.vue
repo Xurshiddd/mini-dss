@@ -1,13 +1,14 @@
 <script setup lang="ts">
 /**
- * HEMIS talaba filtri.
+ * HEMIS sync filtri — xodim va talaba uchun alohida.
  *
- * HEMIS `student-list` qo'llab-quvvatlaydigan barcha parametrlar shu yerda.
- * Ro'yxatlar (fakultet, yo'nalish, guruh, klassifikatorlar) API orqali
- * HEMIS'dan olinadi — qo'lda yozilgan kodlar eskirmasin.
+ * HEMIS `student-list` va `employee-list` qo'llab-quvvatlaydigan barcha
+ * parametrlar shu yerda. Ro'yxatlar (fakultet, yo'nalish, guruh,
+ * klassifikatorlar) API orqali HEMIS'dan olinadi — qo'lda yozilgan kodlar
+ * eskirmasin.
  *
- * ⚠️ Filtrlar faqat TALABAGA tegishli: `employee-list` da bunday parametrlar
- * yo'q, xodimlar har doim to'liq tortiladi.
+ * Ikki filtr bir-biriga TEGISHLI EMAS: maydonlari ham, klassifikatorlari ham
+ * boshqa-boshqa.
  */
 import type { HemisFilterValue } from '~/composables/useHemisFilter'
 
@@ -21,6 +22,9 @@ type Options = {
   student_status: Option[]; level: Option[]; semester: Option[]
   gender: Option[]; citizenship: Option[]; accommodation: Option[]
   province: Option[]; district: Option[]
+  staff_position: Option[]; employee_status: Option[]
+  employment_form: Option[]; employment_staff: Option[]
+  employee_type: Option[]; academic_rank: Option[]; academic_degree: Option[]
   departments: Ref[]; specialties: Ref[]; groups: Ref[]; curricula: Ref[]
 }
 
@@ -35,6 +39,10 @@ const countApprox = ref(false)
 const counting = ref(false)
 const countError = ref('')
 
+const empCount = ref<number | null>(null)
+const empCounting = ref(false)
+const empError = ref('')
+
 onMounted(async () => {
   try {
     opts.value = await api.get<Options>('/api/hemis/filters')
@@ -46,26 +54,25 @@ onMounted(async () => {
   refreshCount()
 })
 
-/** Bo'sh maydonlarni tashlab, faqat to'ldirilgan filtrni qaytaradi. */
-const activeFilter = computed(() => {
-  const out: Record<string, string | number> = {}
-  for (const [k, v] of Object.entries(model.value.filter)) {
-    if (v !== '' && v !== 0 && v !== null && v !== undefined) out[k] = v
-  }
-  return out
-})
+const activeFilter = computed(() => compactFilter(model.value.filter))
+const activeEmployeeFilter = computed(() => compactFilter(model.value.employee_filter))
 
-const activeCount = computed(() => Object.keys(activeFilter.value).length)
+const activeCount = computed(() =>
+  (model.value.students ? Object.keys(activeFilter.value).length : 0) +
+  (model.value.employees ? Object.keys(activeEmployeeFilter.value).length : 0))
 
 /**
- * Nechta talaba topilishini oldindan ko'rsatamiz.
+ * Nechta xodim va talaba topilishini oldindan ko'rsatamiz.
  *
  * Har bosishda so'rov ketmasin — yozish tugagach (400 ms) yuboriladi.
  */
 let timer: any = null
 function refreshCount() {
   clearTimeout(timer)
-  timer = setTimeout(() => fetchCount(false), 400)
+  timer = setTimeout(() => {
+    fetchCount(false)
+    fetchEmployeeCount()
+  }, 400)
 }
 
 /**
@@ -92,11 +99,36 @@ async function fetchCount(exact: boolean) {
   }
 }
 
+/**
+ * Xodim soni — talabanikidan farqli o'laroq ANIQ: xodim filtrlarining
+ * hammasi HEMIS so'rovida bajariladi.
+ */
+async function fetchEmployeeCount() {
+  if (!model.value.employees) { empCount.value = null; return }
+
+  empCounting.value = true
+  empError.value = ''
+  try {
+    const res = await api.post<{ count: number }>(
+      '/api/hemis/employee-count', activeEmployeeFilter.value)
+    empCount.value = res.count
+  } catch (e: any) {
+    empError.value = e.message
+    empCount.value = null
+  } finally {
+    empCounting.value = false
+  }
+}
+
 watch(() => [activeFilter.value, model.value.students], refreshCount, { deep: true })
+watch(() => [activeEmployeeFilter.value, model.value.employees], refreshCount, { deep: true })
 
 // --- bog'liq ro'yxatlar -------------------------------------------------
 
 const departments = computed(() => opts.value?.departments || [])
+
+// Lavozimlar — 233 ta, shuning uchun API tomonda nom bo'yicha saralangan.
+const staffPositions = computed(() => opts.value?.staff_position || [])
 
 const specialties = computed(() => {
   const dep = Number(model.value.filter.department || 0)
@@ -162,8 +194,10 @@ watch(updatedTo, (v) => { model.value.filter.updated_at_to = unixOf(v, true) })
 function reset() {
   updatedFrom.value = null
   updatedTo.value = null
-  const f = model.value.filter as Record<string, string | number>
-  for (const k of Object.keys(f)) f[k] = ''
+  for (const f of [model.value.filter, model.value.employee_filter]) {
+    const rec = f as Record<string, string | number>
+    for (const k of Object.keys(rec)) rec[k] = ''
+  }
 }
 </script>
 
@@ -175,14 +209,28 @@ function reset() {
 
       <div class="spacer" />
 
-      <span v-if="counting" class="dim">hisoblanmoqda…</span>
-      <span v-else-if="countError" class="dim" style="color: var(--err)">{{ countError }}</span>
-      <span v-else-if="count !== null" class="dim">
-        Topiladi: <strong v-if="!countApprox">{{ count.toLocaleString() }}</strong>
-        <template v-else>{{ count.toLocaleString() }} tagacha</template> ta talaba
+      <span v-if="empCounting" class="dim"><span class="spinner" />xodim hisoblanmoqda…</span>
+      <span v-else-if="empError" class="dim" style="color: var(--err)">{{ empError }}</span>
+      <span v-else-if="empCount !== null" class="dim">
+        Xodim: <strong>{{ empCount.toLocaleString() }}</strong> ta
       </span>
 
-      <button v-if="countApprox" class="sm" @click="fetchCount(true)">Aniq sanash</button>
+      <span v-if="counting" class="dim"><span class="spinner" />talaba hisoblanmoqda…</span>
+      <span v-else-if="countError" class="dim" style="color: var(--err)">{{ countError }}</span>
+      <span v-else-if="count !== null" class="dim">
+        Talaba: <strong v-if="!countApprox">{{ count.toLocaleString() }}</strong>
+        <template v-else>{{ count.toLocaleString() }} tagacha</template> ta
+      </span>
+
+      <BusyButton
+        v-if="countApprox"
+        class="sm"
+        :busy="counting"
+        busy-label="Sanalmoqda…"
+        @click="fetchCount(true)"
+      >
+        Aniq sanash
+      </BusyButton>
       <button class="sm" @click="reset">Tozalash</button>
     </div>
 
@@ -190,13 +238,13 @@ function reset() {
       <div v-if="optionsError" class="alert err" style="font-size: 11.5px">
         Ro'yxatlar olinmadi: {{ optionsError }}
       </div>
-      <div v-if="loading" class="dim">Ro'yxatlar yuklanmoqda…</div>
+      <div v-if="loading" class="loading-box"><span class="spinner" /> Ro'yxatlar yuklanmoqda…</div>
 
       <!-- Nimani tortish -->
       <div class="row" style="margin-bottom: 12px">
         <label style="display: flex; align-items: center; gap: 6px; margin: 0">
           <input v-model="model.employees" type="checkbox" style="width: auto" />
-          Xodimlar <span class="dim">(filtrsiz, hammasi)</span>
+          Xodimlar
         </label>
         <label style="display: flex; align-items: center; gap: 6px; margin: 0">
           <input v-model="model.students" type="checkbox" style="width: auto" />
@@ -204,8 +252,120 @@ function reset() {
         </label>
       </div>
 
+      <fieldset :disabled="!model.employees" style="border: 0; padding: 0; margin: 0"
+        :style="{ opacity: model.employees ? 1 : 0.5 }">
+        <div class="dim" style="font-size: 12px; margin-bottom: 6px">Xodim filtri</div>
+
+        <div class="row">
+          <div style="flex: 1; min-width: 150px">
+            <label>Ro'yxat turi</label>
+            <select v-model="model.employee_filter.type" style="width: 100%">
+              <option value="">Barchasi</option>
+              <option value="teacher">O'qituvchilar</option>
+              <option value="employee">Xodimlar</option>
+            </select>
+          </div>
+          <div style="flex: 2; min-width: 200px">
+            <label>Bo'lim / kafedra</label>
+            <select v-model="model.employee_filter.department" style="width: 100%">
+              <option value="">Barchasi</option>
+              <option v-for="d in departments" :key="d.id" :value="d.id">
+                {{ d.name }}<template v-if="d.type"> · {{ d.type }}</template>
+              </option>
+            </select>
+          </div>
+          <div style="flex: 1; min-width: 150px">
+            <label>Xodim holati</label>
+            <select v-model="model.employee_filter.employee_status" style="width: 100%">
+              <option value="">Barchasi</option>
+              <option v-for="o in opts?.employee_status || []" :key="o.code" :value="o.code">{{ o.name }}</option>
+            </select>
+          </div>
+          <div style="flex: 1.4; min-width: 180px">
+            <label>Lavozim</label>
+            <select v-model="model.employee_filter.staff_position" style="width: 100%">
+              <option value="">Barchasi</option>
+              <option v-for="o in staffPositions" :key="o.code" :value="o.code">{{ o.name }}</option>
+            </select>
+          </div>
+          <div style="flex: 1.4; min-width: 180px">
+            <label>Xodim turi</label>
+            <select v-model="model.employee_filter.employee_type" style="width: 100%">
+              <option value="">Barchasi</option>
+              <option v-for="o in opts?.employee_type || []" :key="o.code" :value="o.code">{{ o.name }}</option>
+            </select>
+          </div>
+          <div style="flex: 1.2; min-width: 160px">
+            <label>Mehnat shakli</label>
+            <select v-model="model.employee_filter.employment_form" style="width: 100%">
+              <option value="">Barchasi</option>
+              <option v-for="o in opts?.employment_form || []" :key="o.code" :value="o.code">{{ o.name }}</option>
+            </select>
+          </div>
+          <div style="flex: 1; min-width: 130px">
+            <label>Stavka</label>
+            <select v-model="model.employee_filter.employment_staff" style="width: 100%">
+              <option value="">Barchasi</option>
+              <option v-for="o in opts?.employment_staff || []" :key="o.code" :value="o.code">{{ o.name }}</option>
+            </select>
+          </div>
+        </div>
+
+        <details style="margin-top: 12px">
+          <summary class="dim" style="cursor: pointer; font-size: 12px">
+            Xodim uchun qo'shimcha filtrlar
+          </summary>
+
+          <div class="row" style="margin-top: 10px">
+            <div style="flex: 1; min-width: 140px">
+              <label>Ilmiy unvon</label>
+              <select v-model="model.employee_filter.academic_rank" style="width: 100%">
+                <option value="">Barchasi</option>
+                <option v-for="o in opts?.academic_rank || []" :key="o.code" :value="o.code">{{ o.name }}</option>
+              </select>
+            </div>
+            <div style="flex: 1; min-width: 140px">
+              <label>Ilmiy daraja</label>
+              <select v-model="model.employee_filter.academic_degree" style="width: 100%">
+                <option value="">Barchasi</option>
+                <option v-for="o in opts?.academic_degree || []" :key="o.code" :value="o.code">{{ o.name }}</option>
+              </select>
+            </div>
+            <div style="flex: 1; min-width: 110px">
+              <label>Jinsi</label>
+              <select v-model="model.employee_filter.gender" style="width: 100%">
+                <option value="">Barchasi</option>
+                <option v-for="o in opts?.gender || []" :key="o.code" :value="o.code">{{ o.name }}</option>
+              </select>
+            </div>
+            <div style="flex: 1.4; min-width: 180px">
+              <label>Qidiruv (ism yoki xodim ID)</label>
+              <input v-model="model.employee_filter.search" placeholder="masalan: 3311911041" style="width: 100%" />
+            </div>
+            <div style="flex: 1; min-width: 150px">
+              <label>Passport JSHSHIR</label>
+              <input v-model="model.employee_filter.passport_pin" style="width: 100%" />
+            </div>
+            <div style="flex: 1; min-width: 150px">
+              <label>Passport seriya-raqami</label>
+              <input v-model="model.employee_filter.passport_number" placeholder="AA1234567" style="width: 100%" />
+            </div>
+          </div>
+        </details>
+
+        <p class="dim" style="font-size: 11.5px; margin-bottom: 0">
+          Ishdan bo'shagan ("Bo'shagan") va faol bo'lmagan xodim filtrdan
+          o'tsa ham bazaga QO'SHILMAYDI — mavjudi faolsizlantiriladi va
+          terminaldan olib tashlanadi.
+        </p>
+      </fieldset>
+
+      <hr style="border: 0; border-top: 1px solid var(--border-soft); margin: 14px 0" />
+
       <fieldset :disabled="!model.students" style="border: 0; padding: 0; margin: 0"
         :style="{ opacity: model.students ? 1 : 0.5 }">
+        <div class="dim" style="font-size: 12px; margin-bottom: 6px">Talaba filtri</div>
+
         <!-- Asosiy -->
         <div class="row">
           <div style="flex: 1.6; min-width: 190px">

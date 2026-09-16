@@ -28,6 +28,10 @@ type DayRow struct {
 }
 
 // AttendanceFilter — hisobot filtri.
+//
+// `Limit`/`Offset` ODAM bo'yicha sanaladi, kun-yozuv bo'yicha emas: haftalik
+// va oylik jadval odam × kun to'ri bo'lib chiziladi, kun-yozuv bo'yicha
+// kesilsa bitta odamning kunlari ikki sahifaga bo'linib ketardi.
 type AttendanceFilter struct {
 	From     time.Time // kun (shu kun kiradi)
 	To       time.Time // kun (shu kun kiradi)
@@ -63,9 +67,26 @@ const attendanceCTE = `
 		GROUP BY person_id, day
 	)`
 
+// attendanceWhere — ikkala so'rovga umumiy filtr sharti ($4 — odam, $5 — matn).
+const attendanceWhere = `
+		WHERE ($4 = 0 OR a.person_id = $4)
+		  AND ($5 = '' OR p.full_name ILIKE '%'||$5||'%' OR p.user_id ILIKE '%'||$5||'%')`
+
 // AttendanceDays — kun bo'yicha davomat qatorlari.
+//
+// Sahifa ODAM bo'yicha kesiladi (`page` CTE): tanlangan odamlarning
+// oraliqdagi HAMMA kuni qaytadi, aks holda jadvalning oxirgi qatori yarim
+// chiqardi.
 func (s *Store) AttendanceDays(ctx context.Context, tz string, f AttendanceFilter) ([]DayRow, error) {
-	rows, err := s.pool.Query(ctx, attendanceCTE+`
+	rows, err := s.pool.Query(ctx, attendanceCTE+`,
+		page AS (
+			SELECT a.person_id
+			FROM agg a
+			JOIN people p ON p.id = a.person_id`+attendanceWhere+`
+			GROUP BY a.person_id, p.full_name
+			ORDER BY p.full_name
+			LIMIT $6 OFFSET $7
+		)
 		SELECT a.person_id, p.user_id, p.full_name, dep.name, p.person_type,
 		       a.day, a.first_in, a.last_out, a.events,
 		       CASE
@@ -73,12 +94,10 @@ func (s *Store) AttendanceDays(ctx context.Context, tz string, f AttendanceFilte
 		         THEN EXTRACT(EPOCH FROM (a.last_out - a.first_in)) / 3600.0
 		       END AS hours
 		FROM agg a
+		JOIN page ON page.person_id = a.person_id
 		JOIN people p ON p.id = a.person_id
 		LEFT JOIN departments dep ON dep.id = p.department_id
-		WHERE ($4 = 0 OR a.person_id = $4)
-		  AND ($5 = '' OR p.full_name ILIKE '%'||$5||'%' OR p.user_id ILIKE '%'||$5||'%')
-		ORDER BY a.day DESC, p.full_name
-		LIMIT $6 OFFSET $7`,
+		ORDER BY a.day DESC, p.full_name`,
 		tz, f.From, f.To, f.PersonID, f.Query, f.Limit, f.Offset)
 	if err != nil {
 		return nil, err
@@ -98,6 +117,17 @@ func (s *Store) AttendanceDays(ctx context.Context, tz string, f AttendanceFilte
 	return out, rows.Err()
 }
 
+// AttendancePeopleCount — filtrga tushadigan odamlar soni (sahifalash uchun).
+func (s *Store) AttendancePeopleCount(ctx context.Context, tz string, f AttendanceFilter) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, attendanceCTE+`
+		SELECT count(DISTINCT a.person_id)
+		FROM agg a
+		JOIN people p ON p.id = a.person_id`+attendanceWhere,
+		tz, f.From, f.To, f.PersonID, f.Query).Scan(&n)
+	return n, err
+}
+
 // PersonTotals — bitta odamning oraliq bo'yicha yig'masi.
 type PersonTotals struct {
 	PersonID       int64   `json:"person_id"`
@@ -105,7 +135,7 @@ type PersonTotals struct {
 	FullName       string  `json:"full_name"`
 	DepartmentName *string `json:"department_name"`
 	PersonType     string  `json:"person_type"`
-	Days           int     `json:"days"`        // nechta kun kelgan
+	Days           int     `json:"days"` // nechta kun kelgan
 	NoExitDays     int     `json:"no_exit_days"`
 	TotalHours     float64 `json:"total_hours"`
 	AvgHours       float64 `json:"avg_hours"`

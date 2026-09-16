@@ -83,6 +83,9 @@ people (
   photo_path,           -- bizdagi asl rasm
   photo_hash,           -- o'zgarganini bilish uchun
   photo_status,         -- 'missing'|'pending'|'valid'|'rejected'
+                        -- `rejected` yakuniy EMAS: "Rasmlarni yuklash"
+                        -- bosqichi uni har safar qaytadan urinadi (rasmi
+                        -- qo'lda qo'yilganlardan tashqari)
   photo_reject_reason,
   valid_from, valid_to,
   is_active,
@@ -134,6 +137,11 @@ photo_drafts (
 )
 
 -- Sync tarixi / audit (kim nimani qachon yubordi, xato nima edi).
+--
+-- ⚠️ `status = 'running'` faqat JARAYON ichida yopiladi. Server to'satdan
+-- o'chsa (kompyuter qayta yuklandi) yozuv abadiy "Ketyapti" bo'lib qolardi —
+-- shuning uchun API ishga tushishda `RecoverInterruptedRuns` ularni
+-- 'failed' ga o'tkazadi.
 sync_runs (
   id, device_id, kind,  -- 'push_users' | 'pull_users' | 'push_faces'
                         -- | 'photo_fetch' | 'draft_pull'
@@ -196,8 +204,32 @@ bilan birlashadi): `_department`, `_specialty`, `_group`, `_curriculum`,
 Filtr ro'yxatlari (fakultet, yo'nalish, guruh, o'quv reja va klassifikatorlar)
 `GET /api/hemis/filters` orqali beriladi (30 daqiqa keshlanadi),
 `POST /api/hemis/student-count` esa tanlangan filtr bo'yicha sonni qaytaradi.
-Sync `POST /api/sync/hemis` tanasida `{employees, students, filter}` oladi;
-tana bo'sh bo'lsa — eskisidek, hammasi filtrsiz.
+Sync `POST /api/sync/hemis` tanasida
+`{employees, students, filter, employee_filter}` oladi; tana bo'sh bo'lsa —
+eskisidek, hammasi filtrsiz.
+
+#### HEMIS xodim filtrlari (2026-09-16 da o'lchandi)
+
+`GET /rest/v1/data/employee-list` qabul qiladigan parametrlar: `type`
+(majburiy: `teacher` | `employee` | `all`), `_department`, `_gender`,
+`_staff_position`, `_employee_status`, `_employment_form`,
+`_employment_staff`, `_employee_type`, `_academic_rank`, `_academic_degree`,
+`search`, `passport_pin` + `passport_number`.
+
+| Bilim | Tafsilot |
+|---|---|
+| Hammasi so'rovda ishlaydi | Talabadagidek jimgina e'tiborsiz qolgani yo'q: jami 1317, `_gender=12` → 644, `_employee_status=14` → 574, `_employment_staff=11` → 809, `_department=8` → 43 |
+| `type` ro'yxatni ikkiga bo'ladi | `teacher` 752 + `employee` 565 = `all` 1317 |
+| ⚠️ Klassifikator nomlari maydon nomiga MOS EMAS | `h_staff_position` va `h_employee_status` YO'Q: lavozimlar `h_teacher_position_type` (233 ta), holat esa `h_teacher_status` (11 = Ishlamoqda … **14 = Bo'shagan**) |
+| ⚠️ Passport juftligi | faqat `passport_pin` berilsa filtr jimgina e'tiborsiz qoladi (1317 = jami qaytdi) — ikkalasi BIRGA kerak |
+| Harfli kod → 0 ta | `_gender=abc` 500 bermaydi, bo'sh natija qaytaradi; tekshiruv baribir bizda (`hemis.EmployeeFilter.Validate`) |
+
+`POST /api/hemis/employee-count` tanlangan filtr bo'yicha sonni qaytaradi —
+talabanikidan farqli o'laroq son ANIQ (javob ustida saralash yo'q).
+
+⚠️ Filtrdan o'tgani "bazaga tushadi" degani emas: bo'shagan (`14`) va faol
+bo'lmagan xodim sync qatlamida rad etiladi va bazadagisi
+faolsizlantiriladi.
 
 #### ⛔ Xodimlarni bog'lab bo'lmaydi — hal qilinishi kerak
 
@@ -255,6 +287,67 @@ people (photo_status=valid)
 Hajm: 9801 × 24 ≈ 235k operatsiya. Queue majburiy (Horizon), qurilma bo'yicha
 rate-limit bilan. RPC2 `RecordUpdater.import` (ommaviy import) topilgan — agar
 ishlasa, bu yo'l ancha tez bo'ladi, Faza 1 da sinaladi.
+
+#### Tanlab yuborish (`POST /api/sync/selected`)
+
+Panelda odamlar belgilanib, faqat shular barcha faol terminalga yoziladi
+(`{ids: [...]}`). Oddiy sync'dan ikki farqi bor:
+
+- qurilmadagi mavjud holatga qaramaydi — tanlangan odam allaqachon
+  yozilgan bo'lsa yuzi QAYTA yuboriladi (`device_recno` saqlangani uchun
+  yangi yozuv qo'shilmaydi, faqat yuz almashadi);
+- bu siklda hech kim terminaldan OLIB TASHLANMAYDI.
+
+Yaroqlilik sharti esa bir xil: faol, o'chirishga belgilanmagan, muddati
+o'tmagan va rasmi tekshiruvdan o'tgan. Yuborib bo'lmaydiganlar soni
+javobda `skipped` bo'lib qaytadi — panel "nechtasi rasmi sabab qoldi" deb
+ko'rsatadi.
+
+#### Terminalga yozish tezligi (2026-09-16 da o'lchandi)
+
+Jonli terminalda (ASI7213Y, 10 178 foydalanuvchi) o'lchangan bir amal vaqti:
+
+| Amal | Yo'l | Vaqt | Yangi TCP ulanish |
+|---|---|---|---|
+| Foydalanuvchi qo'shish | RPC2 `RecordUpdater.insert` | 0.11–0.26 s | 0 |
+| Yuz yozish | RPC2 `AccessFace.insertMulti` | **0.45 s** | 0 |
+| Yuz almashtirish | RPC2 `AccessFace.updateMulti` | 0.29 s | 0 |
+| Yuz o'chirish | RPC2 `AccessFace.removeMulti` | **0.07 s** | 0 |
+| Foydalanuvchi o'chirish | RPC2 `RecordUpdater.remove` | 0.09 s | 0 |
+| Foydalanuvchi o'chirish (eski yo'l) | CGI `recordUpdater.cgi` | ~0.7 s | **3** |
+| Yuz yozish (eski yo'l) | CGI `FaceInfoManager.cgi?action=add` | 0.75 s | **3** |
+| Yuz o'chirish (eski yo'l) | CGI `FaceInfoManager.cgi?action=remove` | ~0.7 s | **3** |
+| Foydalanuvchi qidirish | CGI `recordFinder.cgi` | **1.5–2.5 daqiqa** | 9 |
+
+⚠️ **Eng muhim ustun — oxirgisi.** Qurilma digest challenge'ida ulanishni
+yopadi (`Connection: close`), shuning uchun har bir CGI so'rovi uchta yangi
+TCP ulanish ochadi. Ulanishlar yig'ilib, ~2500 odamdan keyin terminal yangi
+ulanish QABUL QILMAY qo'yadi va soatlab o'ziga kelmaydi.
+
+2026-09-16 da aynan shu bo'ldi: bitta terminalga 2509 odam 24 daqiqada
+yozildi (0.57 s/odam — normal), keyin qurilma "o'ldi" va sync qolgan 718
+odamning har biriga 10 soniyalik dial timeout sarflab, hammasini `failed`
+qilib chiqdi. Foydalanuvchi buni "juda sekin" deb ko'rdi.
+
+Shu sababli:
+
+- yozish ham, o'chirish ham **RPC2 orqali** ketadi (bitta sessiya ulanishi
+  qayta ishlatiladi);
+- ketma-ket ulanish xatolari sanaladi: uchtadan keyin qurilmaga 45 soniya
+  dam beriladi, ikki urinishdan keyin ham javob bo'lmasa **sync to'xtaydi**
+  (qolganlari keyingi siklga qoladi, `failed` bo'lib iflos bo'lmaydi);
+- "MAX INSERT RATE EXCEEDED" — qurilmaning sur'at chegarasi; bu xatoda
+  odam `failed` qilinmaydi, 3 soniyadan keyin qayta uriniladi.
+
+⚠️ To'da bo'lib yozish deyarli foyda bermaydi (1 ta → 469 ms/yuz, 4 talik
+to'da → 402 ms/yuz, 5 talik → 499 ms/yuz): vaqt tarmoqda emas, qurilmaning
+yuzdan belgi (feature) ajratishida ketadi. Shuning uchun to'da atigi 4 ta —
+xato bo'lganda ayirib olish oson bo'lsin.
+
+**Amaldagi chegara:** bitta terminal uchun ~0.5 s/odam, ya'ni 7 578 odam
+≈ 1 soat. Buni qisqartirishning yagona yo'li — terminallarni PARALLEL
+yuritish ("Hammasini sync qilish"): 16 terminal bir vaqtda ketsa, jami
+ham ~1 soat.
 
 ### 4.3 Teskari: terminal → mini-DSS bazasi
 

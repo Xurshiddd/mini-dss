@@ -73,6 +73,39 @@ func TestHemisFilterEndpoints(t *testing.T) {
 		t.Logf("kunduzgi 2-kurs: %d ta", body.Count)
 	})
 
+	t.Run("xodim soni", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/hemis/employee-count",
+			strings.NewReader(`{"type":"teacher"}`))
+		a.hemisEmployeeCount(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("HTTP %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var body struct {
+			Count int `json:"count"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("javob o'qilmadi: %v", err)
+		}
+		if body.Count == 0 {
+			t.Error("o'qituvchilar 0 ta — filtr noto'g'ri ketyapti")
+		}
+		t.Logf("o'qituvchi: %d ta", body.Count)
+	})
+
+	t.Run("xato xodim filtri", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/hemis/employee-count",
+			strings.NewReader(`{"type":"students"}`))
+		a.hemisEmployeeCount(rec, req)
+
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("HTTP %d kutilgan 422, javob: %s", rec.Code, rec.Body.String())
+		}
+	})
+
 	t.Run("xato filtr", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/api/hemis/student-count",

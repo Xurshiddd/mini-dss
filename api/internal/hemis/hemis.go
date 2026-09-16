@@ -174,13 +174,12 @@ func (c *Client) fetch(ctx context.Context, path string, page, limit int,
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-// EachEmployee — barcha xodimlarni sahifalab qaytaradi.
+// EachEmployee — filtrga tushgan xodimlarni sahifalab qaytaradi.
 //
 // Kimni qabul qilish/rad etish qarori BU YERDA emas, sync qatlamida —
 // shunda rad etilganlar sanaladi va logda ko'rinadi.
-func (c *Client) EachEmployee(ctx context.Context, fn func(Employee) error) error {
-	// `type=all` bo'lmasa HEMIS faqat bir qismini qaytaradi.
-	return paginate(ctx, c, employeePath, map[string]string{"type": "all"}, fn)
+func (c *Client) EachEmployee(ctx context.Context, f EmployeeFilter, fn func(Employee) error) error {
+	return paginate(ctx, c, employeePath, f.values(), fn)
 }
 
 // Ishdan bo'shatilgan xodim holati kodi.
@@ -227,9 +226,9 @@ func (c *Client) CountStudentsExact(ctx context.Context, f StudentFilter) (int, 
 	return n, err
 }
 
-// CountEmployees — xodimlar soni.
-func (c *Client) CountEmployees(ctx context.Context) (int, error) {
-	return c.count(ctx, employeePath, map[string]string{"type": "all"})
+// CountEmployees — filtrga tushadigan xodimlar soni (bitta yengil so'rov).
+func (c *Client) CountEmployees(ctx context.Context, f EmployeeFilter) (int, error) {
+	return c.count(ctx, employeePath, f.values())
 }
 
 func (c *Client) count(ctx context.Context, path string, extra map[string]string) (int, error) {

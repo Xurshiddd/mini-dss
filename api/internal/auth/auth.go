@@ -28,23 +28,30 @@ import (
 var ErrUnauthorized = errors.New("autentifikatsiya talab qilinadi")
 
 type Service struct {
-	secret   []byte
-	ttl      time.Duration
-	user     string
-	password string
-	aead     cipher.AEAD
+	secret      []byte
+	ttl         time.Duration
+	user        string
+	password    string
+	aead        cipher.AEAD
+	revocations TokenRevocations
 
 	// Bekor qilingan tokenlar (logout). Token'ning SHA-256 hash'i saqlanadi
 	// (ochiq token emas), qiymat — muddati (o'shandan keyin tozalanadi).
 	//
-	// ⚠️ Xotirada: server qayta ishga tushsa tozalanadi. Bitta admin uchun
-	// bu yetarli — logout darhol ishlaydi, restart esa baribir sessiyani
-	// uzadi. Ko'p tugunli o'rnatishda Redis kerak bo'lardi.
+	// Faol ro'yxat xotirada tez tekshiriladi, PostgreSQL esa restartlar orasida
+	// saqlaydi. Tokenning o'zi hech qayerda ochiq holda yozilmaydi.
 	revoked   map[string]time.Time
 	revokedMu sync.Mutex
 }
 
-func New(secret []byte, ttl time.Duration, user, password, encryptionKey string) (*Service, error) {
+type TokenRevocations interface {
+	RevokeToken(context.Context, string, time.Time) error
+	ActiveRevokedTokens(context.Context) (map[string]time.Time, error)
+	CleanupRevokedTokens(context.Context) error
+}
+
+func New(secret []byte, ttl time.Duration, user, password, encryptionKey string,
+	revocations TokenRevocations) (*Service, error) {
 	// Kalitni SHA-256 orqali 32 baytga keltiramiz — istalgan uzunlikdagi
 	// satr berilishi mumkin.
 	sum := sha256.Sum256([]byte(encryptionKey))
@@ -59,7 +66,15 @@ func New(secret []byte, ttl time.Duration, user, password, encryptionKey string)
 
 	s := &Service{
 		secret: secret, ttl: ttl, user: user, password: password, aead: aead,
-		revoked: map[string]time.Time{},
+		revocations: revocations,
+		revoked:     map[string]time.Time{},
+	}
+	if revocations != nil {
+		persisted, err := revocations.ActiveRevokedTokens(context.Background())
+		if err != nil {
+			return nil, fmt.Errorf("bekor qilingan tokenlar o'qilmadi: %w", err)
+		}
+		s.revoked = persisted
 	}
 	go s.cleanupRevoked()
 	return s, nil
@@ -72,15 +87,21 @@ func tokenHash(token string) string {
 
 // Revoke — token'ni bekor qiladi (logout). Muddati o'tguncha qora ro'yxatda.
 func (s *Service) Revoke(token string) {
+	hash := tokenHash(token)
+	expires := time.Now().Add(s.ttl)
 	s.revokedMu.Lock()
-	s.revoked[tokenHash(token)] = time.Now().Add(s.ttl)
+	s.revoked[hash] = expires
 	s.revokedMu.Unlock()
+	if s.revocations != nil {
+		_ = s.revocations.RevokeToken(context.Background(), hash, expires)
+	}
 }
 
 func (s *Service) isRevoked(token string) bool {
 	s.revokedMu.Lock()
 	defer s.revokedMu.Unlock()
-	_, ok := s.revoked[tokenHash(token)]
+	hash := tokenHash(token)
+	_, ok := s.revoked[hash]
 	return ok
 }
 
@@ -98,6 +119,9 @@ func (s *Service) cleanupRevoked() {
 			}
 		}
 		s.revokedMu.Unlock()
+		if s.revocations != nil {
+			_ = s.revocations.CleanupRevokedTokens(context.Background())
+		}
 	}
 }
 
