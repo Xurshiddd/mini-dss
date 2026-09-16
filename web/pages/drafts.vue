@@ -76,6 +76,8 @@ async function load() {
     devices.value = dev || []
   } catch (e: any) {
     error.value = e.message
+  } finally {
+    loaded.value = true
   }
 }
 
