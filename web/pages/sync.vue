@@ -115,260 +115,388 @@ const kindLabel: Record<string, string> = {
 
 const totalPending = computed(() =>
   devices.value.reduce((sum, d) => sum + d.stats.pending, 0))
+
+const activeSyncs = computed(() =>
+  Number(Boolean(hemis.value?.running)) +
+  Number(Boolean(photos.value?.running)) +
+  devices.value.filter((d) => d.progress?.running).length)
+
+function progressWidth(done: number, total: number) {
+  return `${Math.min(100, Math.max(0, (done / (total || 1)) * 100))}%`
+}
+
+function closeFilterOnEscape(event: KeyboardEvent) {
+  if (event.key === 'Escape') showFilter.value = false
+}
+
+onMounted(() => window.addEventListener('keydown', closeFilterOnEscape))
+onUnmounted(() => window.removeEventListener('keydown', closeFilterOnEscape))
 </script>
 
 <template>
-  <div v-if="message" class="alert ok">{{ message }}</div>
-  <div v-if="error" class="alert err">{{ error }}</div>
+  <div class="sync-page">
+    <div v-if="message || error" class="sync-notices">
+      <div v-if="message" class="alert ok">{{ message }}</div>
+      <div v-if="error" class="alert err">{{ error }}</div>
+    </div>
 
-  <HemisFilter v-if="showFilter && hemisConfigured" v-model="syncOptions" />
-
-  <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px">
-    <!-- 1-bosqich: HEMIS -> platforma -->
-    <div class="panel">
-      <div class="panel-head">
-        1 · HEMIS → platforma
-        <button class="sm" :disabled="!hemisConfigured" @click="showFilter = !showFilter">
-          {{ showFilter ? 'Filtrni yopish' : 'Filtr' }}
-        </button>
-        <BusyButton
-          class="primary sm"
-          :busy="busy.is('hemis')"
-          :disabled="hemis?.running || !hemisConfigured"
-          busy-label="Boshlanmoqda…"
-          @click="busy.run('hemis', runHemis)"
-        >
-          {{ hemis?.running ? 'Ketyapti…' : 'Boshlash' }}
-        </BusyButton>
+    <header class="sync-overview">
+      <div>
+        <div class="sync-eyebrow">MA'LUMOT ALMASHINUVI</div>
+        <div class="sync-title">3 bosqichli sinxronizatsiya</div>
       </div>
-      <div class="panel-body">
-        <p class="dim" style="margin-top: 0">
-          Xodim va talabalar HEMIS'dan bazaga tortiladi: ism, ID, jins, tug'ilgan sana,
-          bo'lim, lavozim/yo'nalish. Terminalga hech narsa yozilmaydi.
-        </p>
-
-        <div v-if="!hemisConfigured" class="alert err" style="font-size: 11.5px">
-          HEMIS sozlanmagan — <span class="mono">HEMIS_BASE_URL</span> va
-          <span class="mono">HEMIS_TOKEN</span> ni <span class="mono">.env</span> ga qo'shing.
+      <div class="overview-metrics">
+        <div class="overview-metric">
+          <span>Faol jarayon</span>
+          <strong :class="{ active: activeSyncs }">{{ activeSyncs }}</strong>
         </div>
-
-        <template v-if="hemis">
-          <div v-if="hemis.running" class="dim" style="margin-bottom: 8px">
-            Bosqich: {{ hemis.stage === 'employees' ? 'xodimlar' : 'talabalar' }}
-            <template v-if="hemis.expected">
-              · {{ hemis.total.toLocaleString() }} / {{ hemis.expected.toLocaleString() }}
-            </template>
-          </div>
-
-          <div v-if="hemis.running && hemis.expected" class="progress" style="margin-bottom: 8px">
-            <div :style="{ width: Math.min(100, (hemis.total / hemis.expected) * 100) + '%' }" />
-          </div>
-
-          <div class="stats" style="grid-template-columns: repeat(4, 1fr); gap: 8px">
-            <div class="stat" style="padding: 8px 10px">
-              <div class="stat-label">Jami</div>
-              <div class="stat-value" style="font-size: 18px">{{ hemis.total }}</div>
-            </div>
-            <div class="stat" style="padding: 8px 10px">
-              <div class="stat-label">Yangi</div>
-              <div class="stat-value ok" style="font-size: 18px">{{ hemis.created }}</div>
-            </div>
-            <div class="stat" style="padding: 8px 10px">
-              <div class="stat-label">Yangilandi</div>
-              <div class="stat-value" style="font-size: 18px">{{ hemis.updated }}</div>
-            </div>
-            <div class="stat" style="padding: 8px 10px">
-              <div class="stat-label">Xato</div>
-              <div class="stat-value" :class="hemis.failed ? 'err' : ''" style="font-size: 18px">
-                {{ hemis.failed }}
-              </div>
-            </div>
-          </div>
-
-          <div v-if="hemis.error" class="alert err" style="margin-top: 10px; font-size: 11.5px">
-            {{ hemis.error }}
-          </div>
-        </template>
-
-        <div v-else class="dim">Hali ishga tushirilmagan.</div>
+        <div class="overview-metric">
+          <span>Qurilmalar</span>
+          <strong>{{ devices.length }}</strong>
+        </div>
+        <div class="overview-metric">
+          <span>Kutilmoqda</span>
+          <strong :class="{ warn: totalPending }">{{ totalPending.toLocaleString() }}</strong>
+        </div>
       </div>
-    </div>
+    </header>
 
-    <!-- 2-bosqich: rasmlar -->
-    <div class="panel">
-      <div class="panel-head">
-        2 · Rasmlarni yuklash
-        <BusyButton
-          class="primary sm"
-          :busy="busy.is('photos')"
-          :disabled="photos?.running"
-          busy-label="Boshlanmoqda…"
-          @click="busy.run('photos', runPhotos)"
-        >
-          {{ photos?.running ? 'Ketyapti…' : 'Boshlash' }}
-        </BusyButton>
-      </div>
-      <div class="panel-body">
-        <p class="dim" style="margin-top: 0">
-          HEMIS'dagi rasmlar yuklab olinadi va terminal talablariga tekshiriladi
-          (ko'zlar orasi ≥60px, sifat ≥50, bitta yuz). Rasmsiz odam terminalga
-          yuborilmaydi.
-        </p>
-        <p class="dim" style="margin-top: 6px">
-          Rad etilganlar har safar QAYTA urinib ko'riladi — rad etish ko'pincha
-          vaqtinchalik (manba ochilmadi, servis javob bermadi). Rasmi qo'lda
-          qo'yilganlarga tegilmaydi.
-        </p>
-
-        <template v-if="photos">
-          <div class="progress" style="margin-bottom: 8px">
-            <div :style="{ width: ((photos.updated / (photos.total || 1)) * 100) + '%' }" />
-          </div>
-
-          <div class="stats" style="grid-template-columns: repeat(4, 1fr); gap: 8px">
-            <div class="stat" style="padding: 8px 10px">
-              <div class="stat-label">Jami</div>
-              <div class="stat-value" style="font-size: 18px">{{ photos.total }}</div>
+    <section class="sync-workspace">
+      <div class="stage-grid">
+        <article class="stage-card" :class="{ 'is-running': hemis?.running }">
+          <header class="stage-head">
+            <span class="stage-number">01</span>
+            <div class="stage-heading">
+              <h2>HEMIS → platforma</h2>
+              <span>Shaxsiy ma'lumotlarni olish</span>
             </div>
-            <div class="stat" style="padding: 8px 10px">
-              <div class="stat-label">Ishlandi</div>
-              <div class="stat-value" style="font-size: 18px">{{ photos.updated }}</div>
-            </div>
-            <div class="stat" style="padding: 8px 10px">
-              <div class="stat-label">Yaroqli</div>
-              <div class="stat-value ok" style="font-size: 18px">{{ photos.created }}</div>
-            </div>
-            <div class="stat" style="padding: 8px 10px">
-              <div class="stat-label">Rad etildi</div>
-              <div class="stat-value" :class="photos.skipped ? 'warn' : ''" style="font-size: 18px">
-                {{ photos.skipped }}
-              </div>
-            </div>
-          </div>
-        </template>
-
-        <div v-else class="dim">Hali ishga tushirilmagan.</div>
-      </div>
-    </div>
-
-    <!-- 3-bosqich: platforma -> terminallar -->
-    <div class="panel">
-      <div class="panel-head">
-        3 · Platforma → terminallar
-        <BusyButton
-          class="primary sm"
-          :busy="busy.is('devices')"
-          :disabled="devices.some((d) => d.progress?.running)"
-          busy-label="Boshlanmoqda…"
-          @click="busy.run('devices', runDevices)"
-        >
-          Hammasini sync qilish
-        </BusyButton>
-      </div>
-      <div class="panel-body">
-        <p class="dim" style="margin-top: 0">
-          Rasmi tekshiruvdan o'tgan odamlar barcha faol terminallarga yoziladi.
-          Allaqachon yozilganlar qayta yuborilmaydi — faqat yangilari va rasmi
-          o'zgarganlar ketadi.
-        </p>
-        <p class="dim" style="margin-top: 6px">
-          Teskarisi ham ishlaydi: faolsizlantirilgan, muddati tugagan va
-          o'chirishga belgilangan odamlar terminaldan olib tashlanadi.
-          O'chirilganlar barcha terminaldan tozalangach bazadan yo'qoladi.
-        </p>
-
-        <div v-if="!devices.length" class="dim">Qurilma qo'shilmagan.</div>
-
-        <table v-else>
-          <thead>
-            <tr>
-              <th>Qurilma</th>
-              <th>Yozilgan</th>
-              <th>Kutilmoqda</th>
-              <th style="width: 140px">Holat</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in devices" :key="row.device.id">
-              <td>
-                {{ row.device.name }}
-                <div class="mono dim" style="font-size: 11px">{{ row.device.ip }}</div>
-              </td>
-              <td class="mono">{{ row.stats.synced.toLocaleString() }}</td>
-              <td class="mono dim">{{ row.stats.pending.toLocaleString() }}</td>
-              <td>
-                <template v-if="row.progress?.running">
-                  <div class="progress">
-                    <div :style="{ width: ((row.progress.done / (row.progress.total || 1)) * 100) + '%' }" />
-                  </div>
-                  <div class="mono dim" style="font-size: 11px; margin-top: 3px">
-                    {{ row.progress.done }} / {{ row.progress.total }}
-                    <span v-if="row.progress.removed" style="color: var(--warn)">
-                      · {{ row.progress.removed }} olib tashlandi
-                    </span>
-                  </div>
-                </template>
-                <span v-else-if="!row.device.is_active" class="pill mute">O'chirilgan</span>
-                <span v-else-if="row.stats.failed" class="pill err">{{ row.stats.failed }} xato</span>
-                <span v-else class="pill ok">Tayyor</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        <p v-if="totalPending" class="dim" style="margin-bottom: 0; font-size: 11.5px">
-          Jami {{ totalPending.toLocaleString() }} ta yozuv kutilmoqda.
-        </p>
-      </div>
-    </div>
-  </div>
-
-  <!-- Loglar -->
-  <div class="panel">
-    <div class="panel-head">
-      Sync tarixi
-      <BusyButton class="sm" :busy="busy.is('load')" @click="busy.run('load', load)">
-        Yangilash
-      </BusyButton>
-    </div>
-
-    <div v-if="!loaded" class="loading-box"><span class="spinner" /> Yuklanmoqda…</div>
-    <div v-else-if="!runs.length" class="empty">Hali sync bo'lmagan.</div>
-
-    <table v-else-if="runs.length">
-      <thead>
-        <tr>
-          <th>Boshlandi</th>
-          <th>Turi</th>
-          <th>Qurilma</th>
-          <th>Jami</th>
-          <th>Yangi</th>
-          <th>Yangilandi</th>
-          <th>O'tkazildi</th>
-          <th>Xato</th>
-          <th>Holat</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="run in runs" :key="run.id">
-          <td class="mono dim">{{ toUzDateTime(run.started_at) }}</td>
-          <td>{{ kindLabel[run.kind] || run.kind }}</td>
-          <td class="dim">{{ run.device_name || '—' }}</td>
-          <td class="mono">{{ run.total.toLocaleString() }}</td>
-          <td class="mono">{{ run.created || '—' }}</td>
-          <td class="mono">{{ run.updated || '—' }}</td>
-          <td class="mono dim">{{ run.skipped || '—' }}</td>
-          <td class="mono" :class="run.fail_count ? 'err' : 'dim'">{{ run.fail_count || '—' }}</td>
-          <td>
-            <span class="pill" :class="{ ok: run.status === 'done', err: run.status === 'failed', info: run.status === 'running' }">
-              {{ run.status === 'done' ? 'Tugadi' : run.status === 'failed' ? 'Xato' : 'Ketyapti' }}
+            <span class="stage-state" :class="hemis?.running ? 'running' : 'ready'">
+              {{ hemis?.running ? 'Jarayonda' : 'Tayyor' }}
             </span>
-            <div v-if="run.error" class="mono" style="font-size: 10.5px; color: var(--err); margin-top: 2px">
-              {{ run.error.slice(0, 60) }}
+          </header>
+
+          <div class="stage-body">
+            <p class="stage-description">
+              Xodim va talabalar HEMIS'dan bazaga yuklanadi. Bu bosqich terminallarga
+              ma'lumot yozmaydi.
+            </p>
+
+            <div v-if="!hemisConfigured" class="compact-alert">
+              HEMIS sozlanmagan. <span class="mono">.env</span> faylida manzil va tokenni kiriting.
             </div>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+
+            <template v-if="hemis">
+              <div v-if="hemis.running" class="progress-meta">
+                <span>{{ hemis.stage === 'employees' ? 'Xodimlar' : 'Talabalar' }}</span>
+                <span v-if="hemis.expected">{{ hemis.total.toLocaleString() }} / {{ hemis.expected.toLocaleString() }}</span>
+              </div>
+              <div v-if="hemis.running && hemis.expected" class="progress stage-progress">
+                <div :style="{ width: progressWidth(hemis.total, hemis.expected) }" />
+              </div>
+              <div class="stage-stats">
+                <div><span>Jami</span><strong>{{ hemis.total.toLocaleString() }}</strong></div>
+                <div><span>Yangi</span><strong class="ok">{{ hemis.created.toLocaleString() }}</strong></div>
+                <div><span>Yangilandi</span><strong>{{ hemis.updated.toLocaleString() }}</strong></div>
+                <div><span>Xato</span><strong :class="{ err: hemis.failed }">{{ hemis.failed.toLocaleString() }}</strong></div>
+              </div>
+              <div v-if="hemis.error" class="compact-alert">{{ hemis.error }}</div>
+            </template>
+            <div v-else class="stage-empty">Hali ishga tushirilmagan</div>
+          </div>
+
+          <footer class="stage-actions">
+            <button class="sm" :disabled="!hemisConfigured" @click="showFilter = true">Filtrlar</button>
+            <BusyButton
+              class="primary sm"
+              :busy="busy.is('hemis')"
+              :disabled="hemis?.running || !hemisConfigured"
+              busy-label="Boshlanmoqda…"
+              @click="busy.run('hemis', runHemis)"
+            >
+              {{ hemis?.running ? 'Jarayonda…' : 'Sinxronlash' }}
+            </BusyButton>
+          </footer>
+        </article>
+
+        <article class="stage-card" :class="{ 'is-running': photos?.running }">
+          <header class="stage-head">
+            <span class="stage-number">02</span>
+            <div class="stage-heading">
+              <h2>Rasmlarni tekshirish</h2>
+              <span>Yuklash va sifat nazorati</span>
+            </div>
+            <span class="stage-state" :class="photos?.running ? 'running' : 'ready'">
+              {{ photos?.running ? 'Jarayonda' : 'Tayyor' }}
+            </span>
+          </header>
+
+          <div class="stage-body">
+            <p class="stage-description">
+              HEMIS rasmlari yuklanadi va terminal talablariga tekshiriladi. Qo'lda
+              qo'yilgan rasmlar o'zgartirilmaydi.
+            </p>
+            <template v-if="photos">
+              <div class="progress-meta">
+                <span>{{ photos.running ? 'Tekshirilmoqda' : 'Oxirgi natija' }}</span>
+                <span>{{ photos.updated.toLocaleString() }} / {{ photos.total.toLocaleString() }}</span>
+              </div>
+              <div class="progress stage-progress">
+                <div :style="{ width: progressWidth(photos.updated, photos.total) }" />
+              </div>
+              <div class="stage-stats">
+                <div><span>Jami</span><strong>{{ photos.total.toLocaleString() }}</strong></div>
+                <div><span>Ishlandi</span><strong>{{ photos.updated.toLocaleString() }}</strong></div>
+                <div><span>Yaroqli</span><strong class="ok">{{ photos.created.toLocaleString() }}</strong></div>
+                <div><span>Rad etildi</span><strong :class="{ warn: photos.skipped }">{{ photos.skipped.toLocaleString() }}</strong></div>
+              </div>
+              <div v-if="photos.error" class="compact-alert">{{ photos.error }}</div>
+            </template>
+            <div v-else class="stage-empty">Hali ishga tushirilmagan</div>
+          </div>
+
+          <footer class="stage-actions stage-actions-end">
+            <BusyButton
+              class="primary sm"
+              :busy="busy.is('photos')"
+              :disabled="photos?.running"
+              busy-label="Boshlanmoqda…"
+              @click="busy.run('photos', runPhotos)"
+            >
+              {{ photos?.running ? 'Jarayonda…' : 'Rasmlarni yuklash' }}
+            </BusyButton>
+          </footer>
+        </article>
+
+        <article class="stage-card device-card" :class="{ 'is-running': devices.some((d) => d.progress?.running) }">
+          <header class="stage-head">
+            <span class="stage-number">03</span>
+            <div class="stage-heading">
+              <h2>Platforma → terminallar</h2>
+              <span>Foydalanuvchilarni yuborish</span>
+            </div>
+            <span class="stage-state" :class="devices.some((d) => d.progress?.running) ? 'running' : 'ready'">
+              {{ devices.some((d) => d.progress?.running) ? 'Jarayonda' : 'Tayyor' }}
+            </span>
+          </header>
+
+          <div class="stage-body device-stage-body">
+            <p class="stage-description">
+              Tekshiruvdan o'tganlar faol terminallarga yuboriladi, eskirgan yozuvlar olib tashlanadi.
+            </p>
+            <div v-if="!devices.length" class="stage-empty">Qurilma qo'shilmagan</div>
+            <div v-else class="device-list">
+              <div v-for="row in devices" :key="row.device.id" class="device-row">
+                <div class="device-name">
+                  <strong>{{ row.device.name }}</strong>
+                  <span class="mono">{{ row.device.ip }}</span>
+                </div>
+                <div class="device-counts">
+                  <span>{{ row.stats.synced.toLocaleString() }} yozilgan</span>
+                  <span :class="{ warn: row.stats.pending }">{{ row.stats.pending.toLocaleString() }} kutilmoqda</span>
+                </div>
+                <div class="device-status">
+                  <template v-if="row.progress?.running">
+                    <div class="progress"><div :style="{ width: progressWidth(row.progress.done, row.progress.total) }" /></div>
+                    <span class="mono">{{ row.progress.done }} / {{ row.progress.total }}</span>
+                  </template>
+                  <span v-else-if="!row.device.is_active" class="pill mute">O'chirilgan</span>
+                  <span v-else-if="row.stats.failed" class="pill err">{{ row.stats.failed }} xato</span>
+                  <span v-else class="pill ok">Tayyor</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <footer class="stage-actions stage-actions-end">
+            <BusyButton
+              class="primary sm"
+              :busy="busy.is('devices')"
+              :disabled="devices.some((d) => d.progress?.running)"
+              busy-label="Boshlanmoqda…"
+              @click="busy.run('devices', runDevices)"
+            >
+              Hammasini sinxronlash
+            </BusyButton>
+          </footer>
+        </article>
+      </div>
+
+      <section class="history-panel">
+        <header class="history-head">
+          <div>
+            <h2>Sinxronizatsiya tarixi</h2>
+            <span>Oxirgi {{ runs.length }} ta jarayon</span>
+          </div>
+          <BusyButton class="sm" :busy="busy.is('load')" @click="busy.run('load', load)">
+            Yangilash
+          </BusyButton>
+        </header>
+
+        <div v-if="!loaded" class="loading-box"><span class="spinner" /> Yuklanmoqda…</div>
+        <div v-else-if="!runs.length" class="empty">Hali sinxronizatsiya bo'lmagan.</div>
+        <div v-else class="history-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Boshlandi</th><th>Turi</th><th>Qurilma</th><th>Jami</th>
+                <th>Yangi</th><th>Yangilandi</th><th>O'tkazildi</th><th>Xato</th><th>Holat</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="run in runs" :key="run.id">
+                <td class="mono dim">{{ toUzDateTime(run.started_at) }}</td>
+                <td>{{ kindLabel[run.kind] || run.kind }}</td>
+                <td class="dim">{{ run.device_name || '—' }}</td>
+                <td class="mono">{{ run.total.toLocaleString() }}</td>
+                <td class="mono">{{ run.created || '—' }}</td>
+                <td class="mono">{{ run.updated || '—' }}</td>
+                <td class="mono dim">{{ run.skipped || '—' }}</td>
+                <td class="mono" :class="run.fail_count ? 'err' : 'dim'">{{ run.fail_count || '—' }}</td>
+                <td>
+                  <span class="pill" :class="{ ok: run.status === 'done', err: run.status === 'failed', info: run.status === 'running' }">
+                    {{ run.status === 'done' ? 'Tugadi' : run.status === 'failed' ? 'Xato' : 'Jarayonda' }}
+                  </span>
+                  <div v-if="run.error" class="run-error" :title="run.error">{{ run.error }}</div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <Teleport to="body">
+      <div v-if="showFilter && hemisConfigured" class="filter-overlay" role="dialog" aria-modal="true" aria-label="HEMIS filtrlari">
+        <button class="filter-backdrop" aria-label="Filtrni yopish" @click="showFilter = false" />
+        <aside class="filter-drawer">
+          <div class="filter-drawer-head">
+            <div><strong>HEMIS filtrlari</strong><span>Kerakli xodim va talabalarni tanlang</span></div>
+            <button class="filter-close" aria-label="Yopish" @click="showFilter = false">×</button>
+          </div>
+          <div class="filter-drawer-body"><HemisFilter v-model="syncOptions" /></div>
+        </aside>
+      </div>
+    </Teleport>
   </div>
 </template>
+
+<style scoped>
+.sync-page {
+  height: calc(100vh - var(--header-h) - 48px);
+  min-height: 580px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  overflow: hidden;
+}
+
+.sync-notices { position: fixed; top: 64px; right: 20px; z-index: 20; width: min(420px, calc(100vw - 32px)); }
+.sync-notices .alert { box-shadow: 0 8px 30px rgba(0, 0, 0, .28); }
+
+.sync-overview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 12px 16px;
+  background: linear-gradient(100deg, var(--bg-panel), var(--bg-panel-2));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.sync-eyebrow { color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: 1.4px; }
+.sync-title { margin-top: 2px; font-size: 16px; font-weight: 600; }
+.overview-metrics { display: flex; align-items: center; }
+.overview-metric { min-width: 105px; padding: 0 18px; border-left: 1px solid var(--border); }
+.overview-metric span { display: block; color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
+.overview-metric strong { display: block; margin-top: 1px; font-size: 18px; font-variant-numeric: tabular-nums; }
+.overview-metric strong.active { color: var(--accent); }
+.warn { color: var(--warn) !important; }
+.err { color: var(--err) !important; }
+.ok { color: var(--ok) !important; }
+
+.sync-workspace { min-height: 0; display: grid; grid-template-rows: minmax(285px, 1.15fr) minmax(190px, .85fr); gap: 12px; }
+.stage-grid { min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.stage-card {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.stage-card.is-running { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: inset 0 2px 0 var(--accent); }
+.stage-head { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-bottom: 1px solid var(--border-soft); }
+.stage-number { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 700; }
+.stage-heading { min-width: 0; flex: 1; }
+.stage-heading h2, .history-head h2 { margin: 0; font-size: 13px; font-weight: 600; }
+.stage-heading span, .history-head span { display: block; overflow: hidden; color: var(--text-dim); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.stage-state { padding: 2px 7px; border-radius: 10px; font-size: 10px; white-space: nowrap; }
+.stage-state.ready { background: rgba(34, 192, 125, .12); color: var(--ok); }
+.stage-state.running { background: var(--accent-soft); color: var(--accent); }
+
+.stage-body { min-height: 0; padding: 12px; overflow: auto; scrollbar-width: thin; }
+.stage-description { min-height: 38px; margin: 0 0 12px; color: var(--text-dim); font-size: 11.5px; line-height: 1.55; }
+.stage-empty { display: grid; min-height: 70px; place-items: center; color: var(--text-faint); font-size: 11.5px; }
+.compact-alert { margin: 8px 0; padding: 7px 9px; border: 1px solid rgba(242, 85, 90, .28); border-radius: 4px; background: rgba(242, 85, 90, .08); color: var(--err); font-size: 10.5px; }
+.progress-meta { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 5px; color: var(--text-dim); font-size: 10.5px; }
+.stage-progress { margin-bottom: 10px; }
+.stage-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.stage-stats > div { min-width: 0; padding: 7px 8px; border: 1px solid var(--border-soft); border-radius: 4px; background: var(--bg-panel-2); }
+.stage-stats span { display: block; overflow: hidden; color: var(--text-dim); font-size: 9px; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.stage-stats strong { display: block; overflow: hidden; margin-top: 2px; font-size: 15px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; }
+.stage-actions { display: flex; justify-content: space-between; gap: 8px; padding: 9px 12px; border-top: 1px solid var(--border-soft); background: var(--bg-panel-2); }
+.stage-actions-end { justify-content: flex-end; }
+
+.device-stage-body { display: flex; flex-direction: column; }
+.device-list { min-height: 0; overflow: auto; border: 1px solid var(--border-soft); border-radius: 4px; scrollbar-width: thin; }
+.device-row { display: grid; grid-template-columns: minmax(100px, 1fr) auto minmax(78px, .75fr); align-items: center; gap: 8px; padding: 7px 8px; border-bottom: 1px solid var(--border-soft); }
+.device-row:last-child { border-bottom: 0; }
+.device-row:hover { background: var(--bg-hover); }
+.device-name, .device-counts { min-width: 0; }
+.device-name strong, .device-name span, .device-counts span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.device-name strong { font-size: 11px; }
+.device-name span, .device-counts span, .device-status > span { color: var(--text-dim); font-size: 9.5px; }
+.device-status { min-width: 0; text-align: right; }
+.device-status .progress { margin-bottom: 3px; }
+
+.history-panel { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--bg-panel); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.history-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--border-soft); }
+.history-table-wrap { min-height: 0; overflow: auto; scrollbar-width: thin; }
+.history-table-wrap thead { position: sticky; top: 0; z-index: 1; }
+.history-table-wrap td, .history-table-wrap th { padding-top: 6px; padding-bottom: 6px; }
+.run-error { max-width: 180px; margin-top: 2px; overflow: hidden; color: var(--err); font-family: "Cascadia Mono", Consolas, monospace; font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+
+.filter-overlay { position: fixed; inset: 0; z-index: 100; display: flex; justify-content: flex-end; }
+.filter-backdrop { position: absolute; inset: 0; width: 100%; border: 0; border-radius: 0; background: rgba(3, 8, 14, .68); cursor: default; backdrop-filter: blur(2px); }
+.filter-drawer { position: relative; width: min(920px, 92vw); height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--bg); border-left: 1px solid var(--border); box-shadow: -14px 0 40px rgba(0, 0, 0, .35); }
+.filter-drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 58px; padding: 10px 16px; background: var(--bg-panel); border-bottom: 1px solid var(--border); }
+.filter-drawer-head strong, .filter-drawer-head span { display: block; }
+.filter-drawer-head span { color: var(--text-dim); font-size: 11px; }
+.filter-close { width: 32px; height: 32px; padding: 0; font-size: 22px; line-height: 1; }
+.filter-drawer-body { min-height: 0; padding: 14px; overflow: auto; }
+.filter-drawer-body :deep(.panel) { margin: 0; }
+
+@media (max-width: 1180px) {
+  .sync-page { height: auto; min-height: 0; overflow: visible; }
+  .sync-workspace { display: block; }
+  .stage-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stage-card { min-height: 300px; margin-bottom: 12px; }
+  .device-card { grid-column: 1 / -1; min-height: 280px; }
+  .history-panel { height: min(440px, 55vh); }
+}
+
+@media (max-width: 720px) {
+  .sync-overview { align-items: flex-start; flex-direction: column; }
+  .overview-metrics { width: 100%; }
+  .overview-metric { min-width: 0; flex: 1; padding: 0 10px; }
+  .overview-metric:first-child { padding-left: 0; border-left: 0; }
+  .stage-grid { display: block; }
+  .stage-card, .device-card { min-height: 300px; }
+  .stage-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .device-row { grid-template-columns: 1fr auto; }
+  .device-status { grid-column: 1 / -1; text-align: left; }
+  .filter-drawer { width: 100%; }
+}
+</style>
