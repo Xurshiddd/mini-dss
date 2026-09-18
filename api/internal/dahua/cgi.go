@@ -154,6 +154,50 @@ func (c *Client) FetchUsers(ctx context.Context, offset, count int) ([]map[strin
 	return ParseRecords(body), nil
 }
 
+// UserRecNos — qurilmadagi HAMMA foydalanuvchining UserID → RecNo jadvali.
+//
+// ⚠️ RecNo ni faqat CGI `recordFinder` beradi — RPC2 `AccessUser.doFind`
+// javobida u YO'Q (jonli terminalda tekshirilgan). Shuning uchun jadval
+// BIR MARTA butunlay o'qiladi va sikl davomida qayta ishlatiladi: bitta
+// odamni `FindUser` bilan qidirish 8 ming yozuvli qurilmada 1.5–2.5
+// daqiqa oladi, ya'ni 500 odam uchun bu yo'l yaroqsiz.
+//
+// ⚠️ Bir xil UserID ikki marta uchrasa OXIRGISI qoladi — dublikat
+// yozuvlar bo'lishi mumkin va ularning qaysi biri ishlatilishi
+// qurilmaning o'z tartibiga bog'liq.
+func (c *Client) UserRecNos(ctx context.Context) (map[string]int, error) {
+	const page = 200
+
+	total, err := c.CountUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	index := make(map[string]int, total)
+	for offset := 0; offset < total; offset += page {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		records, err := c.FetchUsers(ctx, offset, page)
+		if err != nil {
+			return nil, err
+		}
+		if len(records) == 0 {
+			break
+		}
+
+		for _, rec := range records {
+			recNo, err := strconv.Atoi(rec["RecNo"])
+			if rec["UserID"] == "" || err != nil {
+				continue
+			}
+			index[rec["UserID"]] = recNo
+		}
+	}
+	return index, nil
+}
+
 // FindUser — UserID bo'yicha qurilmadagi yozuvni topadi.
 //
 // ⚠️ Sahifalab qidiradi. `condition.*` filtrlari bu firmware'da JIMGINA

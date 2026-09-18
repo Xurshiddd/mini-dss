@@ -207,9 +207,18 @@ func (c *Client) rpc(ctx context.Context, method string, params map[string]any, 
 	}
 
 	if resp.failed() {
+		// ⚠️ Qurilma xatoni MATNSIZ, faqat kod bilan qaytarishi mumkin —
+		// masalan `RecordUpdater.insert` dublikat UserID da (o'lchangan
+		// 2026-09-18, 172.16.50.5). Kod yozilmasa `last_error` da quruq
+		// "RPC2 ... xato:" qoladi va sabab bilinmaydi.
 		msg := "noma'lum"
 		if resp.Error != nil {
 			msg = resp.Error.Message
+			if msg == "" {
+				msg = fmt.Sprintf("kod %d", resp.Error.Code)
+			} else {
+				msg = fmt.Sprintf("%s (kod %d)", msg, resp.Error.Code)
+			}
 		}
 		return resp, fmt.Errorf("RPC2 %s xato: %s", method, msg)
 	}
@@ -378,4 +387,47 @@ func (c *Client) UpdateUser(ctx context.Context, object, recNo int, record map[s
 		"record": record,
 	}, object)
 	return err
+}
+
+// UserExists — foydalanuvchi yozuvi qurilmada HAQIQATAN bormi.
+//
+// ⚠️ Bazadagi `device_recno` yozuv qurilmada turganiga kafolat EMAS:
+// terminal tozalansa yoki yozuv boshqa yo'l bilan yo'qolsa, baza buni
+// bilmaydi. O'lchangan (2026-09-18, 192.168.30.216): 4 odamning RecNo si
+// bazada turgan, qurilmada esa o'zlari yo'q edi.
+//
+// ⚠️ `startFind` ning `Condition` filtri AccessUser da ISHLAYDI —
+// AccessFace da e'tiborsiz qolishidan farqli (ikki terminalda
+// solishtirib tekshirilgan). Shunga qaramay UserID ni o'zimiz
+// solishtiramiz: filtr jimgina ishlamay qolsa ham noto'g'ri "bor"
+// javobini bermaymiz.
+func (c *Client) UserExists(ctx context.Context, userID string) (bool, error) {
+	raw, err := c.AccessUserFind(ctx, map[string]any{"UserID": userID}, 5)
+	if err != nil {
+		return false, err
+	}
+
+	var found struct {
+		Info []struct {
+			UserID string `json:"UserID"`
+		} `json:"Info"`
+	}
+	if err := json.Unmarshal(raw, &found); err != nil {
+		return false, fmt.Errorf("doFind javobi o'qilmadi: %w", err)
+	}
+
+	for _, u := range found.Info {
+		if u.UserID == userID {
+			return true, nil
+		}
+	}
+
+	// ⚠️ Filtr jimgina e'tiborsiz qolsa javobda BEGONA yozuvlar keladi —
+	// bunda "yo'q" deb xulosa qilib bo'lmaydi: chaqiruvchi odamni qayta
+	// yozib, qurilmada dublikat yaratardi.
+	if len(found.Info) > 0 {
+		return false, fmt.Errorf("AccessUser.startFind filtri ishlamadi: %s so'raldi, %d ta begona yozuv keldi",
+			userID, len(found.Info))
+	}
+	return false, nil
 }

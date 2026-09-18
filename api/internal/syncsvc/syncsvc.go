@@ -23,18 +23,20 @@ import (
 )
 
 type Progress struct {
-	DeviceID  int64      `json:"device_id"`
-	Operation string     `json:"operation"`
-	Total     int        `json:"total"`
-	Done      int        `json:"done"`
-	Users     int        `json:"users"`
-	Faces     int        `json:"faces"`
-	Failed    int        `json:"failed"`
-	Removed   int        `json:"removed"` // terminaldan olib tashlanganlar
-	Running   bool       `json:"running"`
-	Error     string     `json:"error,omitempty"`
-	StartedAt time.Time  `json:"started_at"`
-	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	DeviceID  int64  `json:"device_id"`
+	Operation string `json:"operation"`
+	Total     int    `json:"total"`
+	Done      int    `json:"done"`
+	Users     int    `json:"users"`
+	Faces     int    `json:"faces"`
+	Failed    int    `json:"failed"`
+	Removed   int    `json:"removed"` // terminaldan olib tashlanganlar
+	// Shu siklda yuborilgan odam turlari. Bo'sh = hamma tur.
+	PersonTypes []string   `json:"person_types,omitempty"`
+	Running     bool       `json:"running"`
+	Error       string     `json:"error,omitempty"`
+	StartedAt   time.Time  `json:"started_at"`
+	EndedAt     *time.Time `json:"ended_at,omitempty"`
 }
 
 // Service — qurilma bo'yicha bitta sync jarayonini boshqaradi.
@@ -131,18 +133,40 @@ type syncJob struct {
 	retryFailed bool
 	limit       int
 
+	// Qaysi turdagi odamlar yoziladi: `employee` / `student` / `other`.
+	// Bo'sh = hamma tur.
+	//
+	// ⚠️ Faqat YOZISHGA ta'sir qiladi. Nofaol odamlarni terminaldan olib
+	// tashlash bu tanlovga bog'liq emas — "faqat xodimlarni yubor" desa,
+	// nofaol talaba ham o'chib ketishi kerak, faol talaba esa qolishi.
+	personTypes []string
+
 	// Faqat shu odamlar (bo'sh = qurilmaga tegishli hammasi). Tanlangan
-	// odam allaqachon yozilgan bo'lsa ham qayta yuboriladi va bu siklda
-	// hech kim terminaldan OLIB TASHLANMAYDI.
+	// odam allaqachon yozilgan bo'lsa ham qayta yuboriladi.
 	personIDs []int64
 }
 
+// SyncRequest — sync boshlash tanlovlari (HTTP so'rovidan keladi).
+type SyncRequest struct {
+	RetryFailed bool
+	// 0 = cheklovsiz.
+	Limit int
+	// `employee` / `student` / `other`; bo'sh = hamma tur.
+	PersonTypes []string
+}
+
 // Start — sync'ni fonda boshlaydi. Allaqachon ishlayotgan bo'lsa xato.
-func (s *Service) Start(deviceID int64, retryFailed bool, limit int) error {
-	return s.start(deviceID, syncJob{retryFailed: retryFailed, limit: limit})
+func (s *Service) Start(deviceID int64, req SyncRequest) error {
+	return s.start(deviceID, syncJob{
+		retryFailed: req.RetryFailed,
+		limit:       req.Limit,
+		personTypes: req.PersonTypes,
+	})
 }
 
 // StartSelected — faqat tanlangan odamlarni qurilmaga yozadi.
+//
+// Tur filtri qo'llanmaydi: odamlar ataylab bittalab tanlangan.
 func (s *Service) StartSelected(deviceID int64, personIDs []int64) error {
 	if len(personIDs) == 0 {
 		return fmt.Errorf("hech kim tanlanmagan")
@@ -162,10 +186,11 @@ func (s *Service) start(deviceID int64, job syncJob) error {
 		return fmt.Errorf("bu qurilmada sync allaqachon ketyapti")
 	}
 	s.progress[deviceID] = &Progress{
-		DeviceID:  deviceID,
-		Operation: "sync",
-		Running:   true,
-		StartedAt: time.Now(),
+		DeviceID:    deviceID,
+		Operation:   "sync",
+		PersonTypes: job.personTypes,
+		Running:     true,
+		StartedAt:   time.Now(),
 	}
 	s.mu.Unlock()
 
@@ -225,29 +250,28 @@ func (s *Service) run(deviceID int64, job syncJob, release func()) {
 	)
 
 	if len(job.personIDs) > 0 {
-		// Tanlab yuborish: faqat shular, olib tashlash yo'q.
+		// Tanlab yuborish: faqat shular.
 		people, err = s.store.PeopleToSyncSelected(ctx, deviceID, job.personIDs)
-		if err != nil {
-			finish(err)
-			return
-		}
 	} else {
-		people, err = s.store.PeopleToSync(ctx, deviceID, job.retryFailed, limit)
-		if err != nil {
-			finish(err)
-			return
-		}
+		people, err = s.store.PeopleToSync(ctx, deviceID, job.retryFailed, limit, job.personTypes)
+	}
+	if err != nil {
+		finish(err)
+		return
+	}
 
-		// Olib tashlanishi kerak bo'lganlar — nofaol, muddati tugagan yoki
-		// o'chirishga belgilanganlar. `retryFailed` faqat yozishni qayta uradi,
-		// o'chirishga aloqasi yo'q.
-		if !job.retryFailed {
-			removals, err = s.store.PeopleToRemove(ctx, deviceID, limit)
-			if err != nil {
-				finish(err)
-				return
-			}
-		}
+	// Olib tashlanishi kerak bo'lganlar — nofaol, muddati tugagan yoki
+	// o'chirishga belgilanganlar.
+	//
+	// HAR QANDAY sikl buni bajaradi: nofaol odam terminalda qolib eshikni
+	// ochaverishi eng qimmat xato, shuning uchun `retry_failed` ham, tur
+	// filtri ham bu bosqichni chetlab o'tolmaydi. Tanlab yuborishda esa
+	// tekshiruv tanlanganlar bilan cheklanadi — operator boshqa odamlarga
+	// tegishni so'ramagan.
+	removals, err = s.store.PeopleToRemove(ctx, deviceID, limit, job.personIDs)
+	if err != nil {
+		finish(err)
+		return
 	}
 
 	s.update(deviceID, func(p *Progress) { p.Total = len(people) + len(removals) })
@@ -282,6 +306,24 @@ func (s *Service) run(deviceID int64, job syncJob, release func()) {
 			object, objectGen = obj, client.SessionGeneration()
 		}
 		return object, nil
+	}
+
+	// Qurilmadagi UserID → RecNo jadvali. FAQAT kerak bo'lganda —
+	// `RecordUpdater.insert` dublikat deb rad etganda — o'qiladi va
+	// sikl oxirigacha saqlanadi (o'qish ~40 ta CGI so'rovi).
+	var recNoIndex map[string]int
+	ensureRecNos := func() (map[string]int, error) {
+		if recNoIndex != nil {
+			return recNoIndex, nil
+		}
+
+		index, err := client.UserRecNos(ctx)
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("qurilma %d: RecNo jadvali o'qildi — %d yozuv", deviceID, len(index))
+		recNoIndex = index
+		return recNoIndex, nil
 	}
 
 	// ⚠️ Qurilma "o'lganda" (yangi TCP ulanish qabul qilmay qo'yganda) har
@@ -378,7 +420,7 @@ func (s *Service) run(deviceID int64, job syncJob, release func()) {
 		if len(faces) == 0 {
 			return nil
 		}
-		err := s.writeFaces(ctx, client, deviceID, faces)
+		err := s.writeFaces(ctx, client, ensureObject, deviceID, faces)
 		faces = faces[:0]
 		return err
 	}
@@ -389,7 +431,7 @@ func (s *Service) run(deviceID int64, job syncJob, release func()) {
 			return
 		}
 
-		recNo, err := s.ensureUser(ctx, client, ensureObject, deviceID, person)
+		recNo, err := s.ensureUser(ctx, client, ensureObject, ensureRecNos, deviceID, person)
 		if err != nil {
 			if stopped(err) {
 				finish(deviceGaveUp(err, i))
@@ -538,14 +580,8 @@ func (s *Service) removeUser(ctx context.Context, client *dahua.Client,
 // Yangi yozilgan RecNo DARHOL bazaga saqlanadi: sync o'rtada uzilsa,
 // keyingi sikl o'sha odamni qaytadan qo'shib, qurilmada dublikat
 // yaratardi.
-func (s *Service) ensureUser(ctx context.Context, client *dahua.Client,
-	ensureObject func() (int, error), deviceID int64, p store.Person) (int, error) {
-
-	object, err := ensureObject()
-	if err != nil {
-		return 0, err
-	}
-
+// cardRecord — odamning terminaldagi foydalanuvchi yozuvi.
+func cardRecord(p store.Person) map[string]any {
 	validFrom, validTo := "", ""
 	if p.ValidFrom != nil {
 		validFrom = p.ValidFrom.Format("2006-01-02") + " 00:00:00"
@@ -553,8 +589,19 @@ func (s *Service) ensureUser(ctx context.Context, client *dahua.Client,
 	if p.ValidTo != nil {
 		validTo = p.ValidTo.Format("2006-01-02") + " 23:59:59"
 	}
+	return dahua.CardRecord(p.UserID, p.FullName, validFrom, validTo, 0, 0)
+}
 
-	record := dahua.CardRecord(p.UserID, p.FullName, validFrom, validTo, 0, 0)
+func (s *Service) ensureUser(ctx context.Context, client *dahua.Client,
+	ensureObject func() (int, error), ensureRecNos func() (map[string]int, error),
+	deviceID int64, p store.Person) (int, error) {
+
+	object, err := ensureObject()
+	if err != nil {
+		return 0, err
+	}
+
+	record := cardRecord(p)
 	if p.DeviceRecNo != nil && *p.DeviceRecNo > 0 {
 		if p.DeviceUserHash == p.DesiredUserHash {
 			return *p.DeviceRecNo, nil
@@ -581,12 +628,32 @@ func (s *Service) ensureUser(ctx context.Context, client *dahua.Client,
 	}
 
 	recNo, err := client.InsertUser(ctx, object, record)
+	adopted := false
 	if err != nil {
-		return 0, err
+		if dahua.Unreachable(err) {
+			return 0, err
+		}
+
+		existing, aerr := s.adoptExistingUser(ctx, client, ensureRecNos, object, deviceID, p, record)
+		switch {
+		case existing > 0:
+			recNo, adopted = existing, true
+		case aerr != nil:
+			return 0, fmt.Errorf("%w (mavjud yozuvni egallash ham bo'lmadi: %v)", err, aerr)
+		default:
+			return 0, err
+		}
 	}
 
 	if err := s.saveSyncState(ctx, deviceID, p.ID, "pending", &recNo, false,
 		p.DesiredUserHash, nil); err != nil {
+		// ⚠️ Egallangan yozuv BIZNIKI emas — odam terminalga boshqa yo'l
+		// bilan tushgan va u yerda qolishi kerak. Kompensatsion o'chirish
+		// faqat hozirgina O'ZIMIZ yozgan kartaga tegishli.
+		if adopted {
+			return 0, fmt.Errorf("mavjud yozuv egallandi, holat bazaga yozilmadi: %w", err)
+		}
+
 		// DB holati yo'qolsa keyingi sync shu odamni yana insert qilib dublikat
 		// yaratadi. Eng xavfsiz kompensatsiya — hozirgina yozilgan kartani qaytarish.
 		if removeErr := client.RemoveUserByRecNo(ctx, object, recNo); removeErr != nil {
@@ -596,6 +663,42 @@ func (s *Service) ensureUser(ctx context.Context, client *dahua.Client,
 	}
 	s.update(deviceID, func(pr *Progress) { pr.Users++ })
 
+	return recNo, nil
+}
+
+// adoptExistingUser — qurilmada ALLAQACHON turgan yozuvni bazaga bog'lab,
+// ma'lumotini yangilaydi. `0` — egallanmadi (odam qurilmada yo'q).
+//
+// ⚠️ `RecordUpdater.insert` dublikat UserID ni rad etadi, xatosi esa
+// MATNSIZ — faqat kod 286064929 (0x110D0121). O'lchangan 2026-09-18,
+// 172.16.50.5: 519 odam shunday tiqilib qolgan edi. Sabab: odam
+// terminalga boshqa yo'l bilan tushgan (eski tizim yoki qo'lda), bazada
+// esa `device_recno` yo'q. Insertni qayta urinish HECH QACHON o'tmaydi —
+// mavjud yozuvni egallash kerak.
+//
+// Kodga emas, JADVALGA tayanamiz: odam RecNo jadvalida bo'lsa — dublikat,
+// bo'lmasa — xato boshqa sababdan va asl xato qaytariladi. Shunda Dahua
+// kodlarini dekodlash shart emas.
+func (s *Service) adoptExistingUser(ctx context.Context, client *dahua.Client,
+	ensureRecNos func() (map[string]int, error), object int, deviceID int64,
+	p store.Person, record map[string]any) (int, error) {
+
+	index, err := ensureRecNos()
+	if err != nil {
+		return 0, err
+	}
+
+	recNo, ok := index[p.UserID]
+	if !ok {
+		return 0, nil
+	}
+
+	if err := client.UpdateUser(ctx, object, recNo, record); err != nil {
+		return 0, fmt.Errorf("mavjud yozuv (RecNo %d) yangilanmadi: %w", recNo, err)
+	}
+
+	log.Printf("qurilma %d: %s qurilmada allaqachon bor edi (bazada RecNo yo'q) — "+
+		"mavjud yozuv egallandi, RecNo %d", deviceID, p.UserID, recNo)
 	return recNo, nil
 }
 
@@ -641,7 +744,7 @@ func (s *Service) readPhoto(p store.Person) ([]byte, error) {
 // kerak). Bitta odamning xatosi qaytarilmaydi: u `device_person_sync` ga
 // yoziladi va sikl davom etadi.
 func (s *Service) writeFaces(ctx context.Context, client *dahua.Client,
-	deviceID int64, jobs []faceJob) error {
+	ensureObject func() (int, error), deviceID int64, jobs []faceJob) error {
 
 	// ⚠️ Yangi va almashtiriladigan yuzlar ARALASHMAYDI: `insertMulti`
 	// mavjud yuz ustiga yozmaydi, `updateMulti` esa yo'g'ini yozadi —
@@ -650,7 +753,7 @@ func (s *Service) writeFaces(ctx context.Context, client *dahua.Client,
 
 	failed := map[int64]error{}
 	for _, group := range []struct {
-		jobs   []faceJob
+		jobs   []*faceJob
 		update bool
 	}{{fresh, false}, {replace, true}} {
 		if len(group.jobs) == 0 {
@@ -668,17 +771,32 @@ func (s *Service) writeFaces(ctx context.Context, client *dahua.Client,
 		// To'da yiqildi — bittalab urinamiz: bitta yaroqsiz rasm
 		// qolganlarini olib ketmasin.
 		for _, job := range group.jobs {
-			one := []faceJob{job}
-			if err := s.writeFaceGroup(ctx, client, one, job.replace); err != nil {
-				if dahua.Unreachable(err) {
-					return err
-				}
-				failed[job.person.ID] = err
+			err := s.writeFaceGroup(ctx, client, []*faceJob{job}, job.replace)
+			if err == nil {
+				continue
 			}
+			if dahua.Unreachable(err) {
+				return err
+			}
+
+			// Yuz ikkala metod bilan ham yozilmadi — odamning O'ZI
+			// qurilmada yo'q bo'lishi mumkin.
+			recovered, rerr := s.recoverMissingUser(ctx, client, ensureObject, deviceID, job)
+			if recovered {
+				continue
+			}
+			if dahua.Unreachable(rerr) {
+				return rerr
+			}
+			if rerr != nil {
+				err = fmt.Errorf("%w (odamni qayta yozib ko'rildi: %v)", err, rerr)
+			}
+			failed[job.person.ID] = err
 		}
 	}
 
-	for _, job := range jobs {
+	for i := range jobs {
+		job := &jobs[i]
 		var recArg *int
 		if job.recNo > 0 {
 			recArg = &job.recNo
@@ -703,12 +821,60 @@ func (s *Service) writeFaces(ctx context.Context, client *dahua.Client,
 	return nil
 }
 
+// recoverMissingUser — yuz yozilmaganda odamning o'zi qurilmada bormi,
+// tekshiradi va yo'q bo'lsa kartani qayta yozib, yuzni takrorlaydi.
+//
+// ⚠️ `AccessFace.insertMulti` ning "Batch Process Error" javobiga IKKI
+// sabab bor: yuz allaqachon mavjud (buni `writeFaceGroup` qarama-qarshi
+// metod bilan qoplaydi) YOKI foydalanuvchining o'zi qurilmada yo'q.
+// Ikkinchisi bazadagi `device_recno` eskirganda yuz beradi: `ensureUser`
+// saqlangan RecNo va mos `user_hash` ni ko'rib qurilmaga umuman
+// murojaat qilmaydi, shuning uchun karta hech qachon qayta yozilmaydi va
+// odam HAR SIKLDA "failed" bo'lib qolaveradi (o'lchangan 2026-09-18,
+// 192.168.30.216: 4 odam, `attempts` = 6, boshqa 17 terminalda esa
+// o'sha odamlar muammosiz yozilgan).
+//
+// `recovered == true` — yuz yozildi; `job.recNo` yangi qiymatga
+// almashgan bo'lishi mumkin va chaqiruvchi uni bazaga saqlaydi.
+func (s *Service) recoverMissingUser(ctx context.Context, client *dahua.Client,
+	ensureObject func() (int, error), deviceID int64, job *faceJob) (recovered bool, err error) {
+
+	exists, err := client.UserExists(ctx, job.person.UserID)
+	if err != nil {
+		return false, fmt.Errorf("odam qurilmada bormi — tekshirilmadi: %w", err)
+	}
+	if exists {
+		// Karta joyida — xato boshqa sababdan (masalan yaroqsiz rasm).
+		return false, nil
+	}
+
+	object, err := ensureObject()
+	if err != nil {
+		return false, err
+	}
+
+	recNo, err := client.InsertUser(ctx, object, cardRecord(job.person))
+	if err != nil {
+		return false, fmt.Errorf("karta qayta yozilmadi: %w", err)
+	}
+	log.Printf("qurilma %d: %s qurilmada yo'q edi (bazadagi RecNo eskirgan) — "+
+		"karta qayta yozildi, yangi RecNo %d", deviceID, job.person.UserID, recNo)
+	job.recNo = recNo
+	s.update(deviceID, func(p *Progress) { p.Users++ })
+
+	// Karta endi yangi — yuzi ham yo'q, demak `insertMulti`.
+	if err := s.writeFaceGroup(ctx, client, []*faceJob{job}, false); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // writeFaceGroup — bir xil turdagi yuzlarni bitta so'rovda yozadi.
 //
 // ⚠️ Qurilma yozish SUR'ATINI cheklaydi ("MAX INSERT RATE EXCEEDED").
 // Bu rasmning aybi emas — biroz kutib qayta urinilsa o'tadi.
 func (s *Service) writeFaceGroup(ctx context.Context, client *dahua.Client,
-	jobs []faceJob, update bool) error {
+	jobs []*faceJob, update bool) error {
 
 	uploads := make([]dahua.FaceUpload, 0, len(jobs))
 	for _, job := range jobs {
@@ -750,13 +916,15 @@ func (s *Service) writeFaceGroup(ctx context.Context, client *dahua.Client,
 	return err
 }
 
-func splitFaces(jobs []faceJob) (fresh, replace []faceJob) {
-	for _, job := range jobs {
-		if job.replace {
-			replace = append(replace, job)
+// ⚠️ Ko'rsatkich qaytadi: tiklash bosqichi `recNo` ni O'ZGARTIRADI va
+// o'zgarish holat saqlanadigan joyga yetib borishi kerak.
+func splitFaces(jobs []faceJob) (fresh, replace []*faceJob) {
+	for i := range jobs {
+		if jobs[i].replace {
+			replace = append(replace, &jobs[i])
 			continue
 		}
-		fresh = append(fresh, job)
+		fresh = append(fresh, &jobs[i])
 	}
 	return fresh, replace
 }

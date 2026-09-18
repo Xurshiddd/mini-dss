@@ -131,25 +131,35 @@ const checkedSyncable = computed(() =>
     checked.value.has(p.id) && p.photo_status === 'valid' &&
     p.is_active && !p.pending_delete).length)
 
+// Nofaol qilinganlar yozilmaydi, terminallardan O'CHIRILADI — tanlovda
+// shundaylar bo'lsa buni oldindan aytamiz.
+const checkedRemovable = computed(() =>
+  people.value.filter((p) =>
+    checked.value.has(p.id) && (!p.is_active || p.pending_delete)).length)
+
 async function pushChecked() {
   if (checked.value.size === 0) return
 
-  const skipped = checked.value.size - checkedSyncable.value
+  const skipped = checked.value.size - checkedSyncable.value - checkedRemovable.value
   if (!confirm(
     `${checked.value.size} ta tanlanganlardan ${checkedSyncable.value} tasi ` +
     `barcha faol terminalga yoziladi.` +
-    (skipped ? `\n\n${skipped} tasi yuborilmaydi: rasmi yaroqli emas, ` +
-               `o'zi nofaol yoki muddati o'tgan.` : '') +
+    (checkedRemovable.value ? `\n\n${checkedRemovable.value} tasi nofaol — ` +
+               `ular terminallardan O'CHIRILADI.` : '') +
+    (skipped ? `\n\n${skipped} tasiga tegilmaydi: rasmi yaroqli emas ` +
+               `yoki muddati o'tgan.` : '') +
     `\n\nTerminalda allaqachon bo'lganlarning yuzi qaytadan yoziladi.` +
     `\n\nDavom etilsinmi?`)) return
 
   error.value = ''; message.value = ''
   try {
     const res = await api.post<{
-      started: number; busy: number; devices: number; people: number; skipped: number
+      started: number; busy: number; devices: number
+      people: number; removing: number; skipped: number
     }>('/api/sync/selected', { ids: [...checked.value] })
 
     message.value = `${res.people.toLocaleString()} ta odam ${res.started} ta terminalga yuborilmoqda`
+    if (res.removing) message.value += ` · ${res.removing} tasi o'chirilmoqda`
     if (res.busy) message.value += ` · ${res.busy} ta terminal band edi`
     if (res.skipped) message.value += ` · ${res.skipped} tasi yaroqsiz (yuborilmadi)`
     message.value += '. Borishini "Sync" sahifasida kuzating.'

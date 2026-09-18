@@ -717,9 +717,14 @@ func (a *API) deviceCaps(w http.ResponseWriter, r *http.Request) {
 		{"access", "AC.getCaps", map[string]any{"WantMethods": false, "WantCaps": true}},
 		{"software", "magicBox.getSoftwareVersion", nil},
 		{"services", "system.listService", nil},
-		{"m_accessface", "system.listMethod", map[string]any{"name": "AccessFace"}},
-		{"m_accessuser", "system.listMethod", map[string]any{"name": "AccessUser"}},
-		{"m_faceinfo", "system.listMethod", map[string]any{"name": "FaceInfoManager"}},
+		// ⚠️ `system.listMethod` `name` parametrini JIMGINA e'tiborsiz
+		// qoldiradi va doim `system` ning o'z metodlarini qaytaradi —
+		// shu sababli `AccessFace.*` "yo'q" deb noto'g'ri xulosa
+		// qilingan edi. Har xizmatdan O'ZIDAN so'raladi.
+		{"m_accessface", "AccessFace.listMethod", nil},
+		{"m_accessuser", "AccessUser.listMethod", nil},
+		{"m_faceinfo", "FaceInfoManager.listMethod", nil},
+		{"m_recordupdater", "RecordUpdater.listMethod", nil},
 	}
 
 	out := map[string]any{}
@@ -743,12 +748,23 @@ func (a *API) startSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		RetryFailed bool `json:"retry_failed"`
-		Limit       int  `json:"limit"`
+		RetryFailed bool     `json:"retry_failed"`
+		Limit       int      `json:"limit"`
+		PersonTypes []string `json:"person_types"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 
-	if err := a.sync.Start(id, body.RetryFailed, body.Limit); err != nil {
+	types, err := cleanPersonTypes(body.PersonTypes)
+	if err != nil {
+		fail(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
+	if err := a.sync.Start(id, syncsvc.SyncRequest{
+		RetryFailed: body.RetryFailed,
+		Limit:       body.Limit,
+		PersonTypes: types,
+	}); err != nil {
 		fail(w, http.StatusConflict, err.Error())
 		return
 	}

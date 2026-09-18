@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"minidss/api/internal/store"
+	"minidss/api/internal/syncsvc"
 )
 
 // ------------------------------------------------------------------ bo'limlar
@@ -82,6 +84,37 @@ func (a *API) deleteDepartment(w http.ResponseWriter, r *http.Request) {
 	write(w, http.StatusNoContent, nil)
 }
 
+// ---------------------------------------------------------------- odam turlari
+
+// personTypes — ruxsat etilgan odam turlari.
+var personTypes = map[string]bool{"employee": true, "student": true, "other": true}
+
+const personTypeError = "tur employee, student yoki other bo'lishi kerak"
+
+// cleanPersonTypes — sync so'rovidagi tur filtrini tekshiradi.
+//
+// Bo'sh ro'yxat "filtr yo'q" degani: hamma tur yuboriladi. Takrorlar
+// tashlanadi — SQL `= ANY` uchun ular ortiqcha.
+func cleanPersonTypes(in []string) ([]string, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, t := range in {
+		if !personTypes[t] {
+			return nil, fmt.Errorf("%s (kelgani: %q)", personTypeError, t)
+		}
+		if seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	return out, nil
+}
+
 // ------------------------------------------------------- odam qo'lda qo'shish
 
 type personInput struct {
@@ -115,8 +148,8 @@ func (a *API) createPerson(w http.ResponseWriter, r *http.Request) {
 	case in.FullName == "":
 		fail(w, http.StatusUnprocessableEntity, "ism kerak")
 		return
-	case in.PersonType != "employee" && in.PersonType != "student" && in.PersonType != "other":
-		fail(w, http.StatusUnprocessableEntity, "tur employee, student yoki other bo'lishi kerak")
+	case !personTypes[in.PersonType]:
+		fail(w, http.StatusUnprocessableEntity, personTypeError)
 		return
 	}
 
@@ -296,9 +329,10 @@ func (a *API) markDeleted(w http.ResponseWriter, r *http.Request, ids []int64) {
 
 // syncSelected — TANLANGAN odamlarni barcha faol terminallarga yozadi.
 //
-// Oddiy sync'dan farqi: qurilmadagi mavjud yozuvlarga qaramaydi (tanlangan
-// odam allaqachon yozilgan bo'lsa yuzi qaytadan yuboriladi) va hech kimni
-// terminaldan olib tashlamaydi.
+// Oddiy sync'dan farqi: qurilmadagi mavjud yozuvlarga qaramaydi — tanlangan
+// odam allaqachon yozilgan bo'lsa yuzi qaytadan yuboriladi. Olib tashlash
+// esa TANLANGANLAR bilan cheklanadi: nofaol qilingan odam tanlovga tushsa,
+// u yozilmaydi va terminaldan o'chiriladi.
 //
 // Rasmi tekshiruvdan o'tmagan odam yuborilMAYDI: yuzsiz foydalanuvchi
 // terminalda hech kimni kiritmaydi. Nechtasi shu sababdan chetda qolgani
@@ -316,15 +350,24 @@ func (a *API) syncSelected(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ids, err := a.store.SyncableIDs(r.Context(), in.IDs)
+	writable, err := a.store.SyncableIDs(r.Context(), in.IDs)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	skipped := len(in.IDs) - len(ids)
-	if len(ids) == 0 {
+
+	// Nofaol qilingan odam ham tanlovga tushishi mumkin — u yozilmaydi,
+	// terminaldan O'CHIRILADI. Shu sababli "yuborib bo'lmaydi" deb rad
+	// etishdan oldin o'chiriladiganlarni ham sanaymiz.
+	removable, err := a.store.RemovableIDs(r.Context(), in.IDs)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if len(writable) == 0 && len(removable) == 0 {
 		fail(w, http.StatusUnprocessableEntity,
-			"tanlanganlarning hech birini yuborib bo'lmaydi — rasmi yaroqli, "+
+			"tanlanganlar bilan qilinadigan ish yo'q — yozish uchun rasmi yaroqli, "+
 				"o'zi faol va muddati o'tmagan bo'lishi kerak")
 		return
 	}
@@ -335,9 +378,11 @@ func (a *API) syncSelected(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sync siklining o'ziga TANLANGANLARNING HAMMASI beriladi: kimni yozish
+	// va kimni o'chirish kerakligini qurilma bo'yicha so'rovlar hal qiladi.
 	started, busy := 0, 0
 	for _, d := range devices {
-		if err := a.sync.StartSelected(d.ID, ids); err != nil {
+		if err := a.sync.StartSelected(d.ID, in.IDs); err != nil {
 			busy++
 			continue
 		}
@@ -345,11 +390,12 @@ func (a *API) syncSelected(w http.ResponseWriter, r *http.Request) {
 	}
 
 	write(w, http.StatusAccepted, map[string]any{
-		"started": started,
-		"busy":    busy,
-		"devices": len(devices),
-		"people":  len(ids),
-		"skipped": skipped,
+		"started":  started,
+		"busy":     busy,
+		"devices":  len(devices),
+		"people":   len(writable),
+		"removing": len(removable),
+		"skipped":  len(in.IDs) - len(writable) - len(removable),
 	})
 }
 
@@ -386,6 +432,18 @@ func (a *API) syncRuns(w http.ResponseWriter, r *http.Request) {
 // ⚠️ Har qurilma o'z goroutine'ida ketadi — bu XAVFSIZ, chunki cheklov
 // qurilma ICHIDA (bittaga bitta jarayon), qurilmalar orasida emas.
 func (a *API) syncAll(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		// `employee` / `student` / `other`; bo'sh = hamma tur.
+		PersonTypes []string `json:"person_types"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	types, err := cleanPersonTypes(body.PersonTypes)
+	if err != nil {
+		fail(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
 	devices, err := a.store.ActiveDevices(r.Context())
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
@@ -394,7 +452,7 @@ func (a *API) syncAll(w http.ResponseWriter, r *http.Request) {
 
 	started, busy := 0, 0
 	for _, d := range devices {
-		if err := a.sync.Start(d.ID, false, 0); err != nil {
+		if err := a.sync.Start(d.ID, syncsvc.SyncRequest{PersonTypes: types}); err != nil {
 			busy++
 			continue
 		}
@@ -403,6 +461,7 @@ func (a *API) syncAll(w http.ResponseWriter, r *http.Request) {
 
 	write(w, http.StatusAccepted, map[string]any{
 		"started": started, "busy": busy, "devices": len(devices),
+		"person_types": types,
 	})
 }
 

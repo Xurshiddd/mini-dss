@@ -23,6 +23,8 @@ type Run = {
 
 const hemis = ref<HemisProgress>(null)
 const showFilter = ref(false)
+// Terminalga yuborish tur filtri. Bo'sh = hamma tur.
+const deviceTypes = ref<string[]>([])
 const syncOptions = ref(emptyHemisFilter())
 const photos = ref<HemisProgress>(null)
 const hemisConfigured = ref(false)
@@ -95,14 +97,23 @@ async function runPhotos() {
 async function runDevices() {
   error.value = ''; message.value = ''
   try {
-    const res = await api.post<{ started: number; busy: number; devices: number }>('/api/sync/devices')
+    const res = await api.post<{ started: number; busy: number; devices: number }>(
+      '/api/sync/devices', { person_types: deviceTypes.value })
     message.value = `${res.started} ta qurilmada sync boshlandi` +
-      (res.busy ? `, ${res.busy} tasi band edi` : '') + '.'
+      (res.busy ? `, ${res.busy} tasi band edi` : '') +
+      (deviceTypes.value.length ? ` (${typeLabels(deviceTypes.value)})` : '') + '.'
     await load()
   } catch (e: any) {
     error.value = e.message
   }
 }
+
+const personTypeLabel: Record<string, string> = {
+  employee: 'xodimlar', student: 'talabalar', other: 'boshqalar',
+}
+
+const typeLabels = (types: string[]) =>
+  types.map((t) => personTypeLabel[t] || t).join(', ')
 
 const kindLabel: Record<string, string> = {
   hemis_pull: 'HEMIS → platforma',
@@ -281,8 +292,11 @@ onUnmounted(() => window.removeEventListener('keydown', closeFilterOnEscape))
 
           <div class="stage-body device-stage-body">
             <p class="stage-description">
-              Tekshiruvdan o'tganlar faol terminallarga yuboriladi, eskirgan yozuvlar olib tashlanadi.
+              Tekshiruvdan o'tganlar faol terminallarga yuboriladi, nofaol va
+              eskirgan yozuvlar olib tashlanadi.
             </p>
+
+            <PersonTypeFilter v-model="deviceTypes" class="device-type-filter" />
             <div v-if="!devices.length" class="stage-empty">Qurilma qo'shilmagan</div>
             <div v-else class="device-list">
               <div v-for="row in devices" :key="row.device.id" class="device-row">
@@ -450,6 +464,7 @@ onUnmounted(() => window.removeEventListener('keydown', closeFilterOnEscape))
 .stage-actions-end { justify-content: flex-end; }
 
 .device-stage-body { display: flex; flex-direction: column; }
+.device-type-filter { margin-bottom: 10px; }
 .device-list { min-height: 0; overflow: auto; border: 1px solid var(--border-soft); border-radius: 4px; scrollbar-width: thin; }
 .device-row { display: grid; grid-template-columns: minmax(100px, 1fr) auto minmax(78px, .75fr); align-items: center; gap: 8px; padding: 7px 8px; border-bottom: 1px solid var(--border-soft); }
 .device-row:last-child { border-bottom: 0; }

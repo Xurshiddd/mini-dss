@@ -288,20 +288,53 @@ Hajm: 9801 × 24 ≈ 235k operatsiya. Queue majburiy (Horizon), qurilma bo'yicha
 rate-limit bilan. RPC2 `RecordUpdater.import` (ommaviy import) topilgan — agar
 ishlasa, bu yo'l ancha tez bo'ladi, Faza 1 da sinaladi.
 
+#### Kimni yuborish: tur filtri va nofaollar
+
+Terminalga yozish so'rovlari (`POST /api/devices/{id}/sync` va
+`POST /api/sync/devices`) `person_types` qabul qiladi:
+
+```json
+{ "person_types": ["employee"] }
+```
+
+Ruxsat etilgan qiymatlar `employee` / `student` / `other`; bo'sh yoki
+berilmagan ro'yxat "hamma tur" degani. Panelda bu stage 03 kartasidagi va
+Qurilmalar sahifasidagi "Kimni yuborish" chiplari.
+
+⚠️ Filtr faqat YOZISHGA ta'sir qiladi. Terminaldan olib tashlash bosqichi
+uni ATAYLAB e'tiborsiz qoldiradi:
+
+- "faqat xodimlarni yubor" desa, terminalda turgan FAOL talabalar
+  o'chib ketmasligi kerak;
+- NOFAOL odam esa tanlangan turdan qat'i nazar, `retry_failed` bo'lsa ham,
+  har qanday siklda terminaldan o'chiriladi — nofaol odam eshikni
+  ochaverishi eng qimmat xato.
+
+Shu sababli bir odam bir vaqtda ikki ro'yxatdan biriga tushadi:
+
+| Holat | Yoziladi | Terminaldan o'chiriladi |
+|---|---|---|
+| faol + rasmi yaroqli | ✅ | — |
+| faol + rasmi yaroqsiz | — | — (tegilmaydi) |
+| nofaol / `pending_delete` / muddati o'tgan | — | ✅ |
+
 #### Tanlab yuborish (`POST /api/sync/selected`)
 
 Panelda odamlar belgilanib, faqat shular barcha faol terminalga yoziladi
-(`{ids: [...]}`). Oddiy sync'dan ikki farqi bor:
+(`{ids: [...]}`). Oddiy sync'dan farqi:
 
 - qurilmadagi mavjud holatga qaramaydi — tanlangan odam allaqachon
   yozilgan bo'lsa yuzi QAYTA yuboriladi (`device_recno` saqlangani uchun
   yangi yozuv qo'shilmaydi, faqat yuz almashadi);
-- bu siklda hech kim terminaldan OLIB TASHLANMAYDI.
+- olib tashlash TANLANGANLAR bilan cheklanadi — tanlovga tushmagan
+  odamlarga tegilmaydi;
+- tur filtri qo'llanmaydi: tanlov allaqachon bittalab qilingan.
 
 Yaroqlilik sharti esa bir xil: faol, o'chirishga belgilanmagan, muddati
-o'tmagan va rasmi tekshiruvdan o'tgan. Yuborib bo'lmaydiganlar soni
-javobda `skipped` bo'lib qaytadi — panel "nechtasi rasmi sabab qoldi" deb
-ko'rsatadi.
+o'tmagan va rasmi tekshiruvdan o'tgan. Javobda uchta son qaytadi:
+`people` — yoziladiganlar, `removing` — nofaol bo'lgani uchun
+terminallardan o'chiriladiganlar, `skipped` — hech qaysi ro'yxatga
+tushmaganlar (odatda rasmi yaroqsizlar).
 
 #### Terminalga yozish tezligi (2026-09-16 da o'lchandi)
 

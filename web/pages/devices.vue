@@ -14,6 +14,8 @@ type Progress = {
 type Row = { device: Device; stats: { synced: number; pending: number; failed: number; faces: number }; progress: Progress }
 
 const rows = ref<Row[]>([])
+// Sync tugmalari uchun umumiy tur filtri. Bo'sh = hamma tur.
+const syncTypes = ref<string[]>([])
 const message = ref('')
 const error = ref('')
 const editing = ref<Partial<Device> & { password?: string } | null>(null)
@@ -104,7 +106,10 @@ async function fixTime(d: Device) {
 async function sync(d: Device, retryFailed = false) {
   error.value = ''; message.value = ''
   try {
-    await api.post(`/api/devices/${d.id}/sync`, { retry_failed: retryFailed })
+    await api.post(`/api/devices/${d.id}/sync`, {
+      retry_failed: retryFailed,
+      person_types: syncTypes.value,
+    })
     message.value = `${d.name}: sync boshlandi.`
     await load()
   } catch (e: any) {
@@ -165,7 +170,10 @@ async function remove(d: Device) {
   <div class="panel">
     <div class="panel-head">
       Qurilmalar
-      <button class="primary sm" @click="editing = blank()">Qurilma qo'shish</button>
+      <div class="row" style="align-items: flex-end; gap: 14px">
+        <PersonTypeFilter v-model="syncTypes" />
+        <button class="primary sm" @click="editing = blank()">Qurilma qo'shish</button>
+      </div>
     </div>
 
     <div v-if="!loaded" class="loading-box"><span class="spinner" /> Yuklanmoqda…</div>

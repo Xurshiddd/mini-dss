@@ -360,8 +360,16 @@ const peopleToSyncSelect = `
 		` + overridePhotoJoin + `
 		WHERE ` + syncablePerson + ` AND `
 
+// personTypeFilter — odam turi bo'yicha tanlov. Bo'sh (NULL) ro'yxat
+// hamma turni oladi, shu sababli filtr yo'qligi alohida shart talab
+// qilmaydi.
+const personTypeFilter = ` AND ($3::text[] IS NULL OR p.person_type = ANY($3::text[]))`
+
 // PeopleToSync — qurilmaga yozilishi kerak bo'lganlar.
-func (s *Store) PeopleToSync(ctx context.Context, deviceID int64, retryFailed bool, limit int) ([]Person, error) {
+//
+// `personTypes` — `employee` / `student` / `other` dan iborat tanlov;
+// bo'sh bo'lsa hamma tur yuboriladi.
+func (s *Store) PeopleToSync(ctx context.Context, deviceID int64, retryFailed bool, limit int, personTypes []string) ([]Person, error) {
 	condition := `NOT EXISTS (SELECT 1 FROM device_person_sync d
 			WHERE d.person_id = p.id AND d.device_id = $1 AND d.state = 'synced'
 			  AND d.user_hash IS NOT DISTINCT FROM md5(concat_ws(chr(31), p.full_name,
@@ -371,9 +379,9 @@ func (s *Store) PeopleToSync(ctx context.Context, deviceID int64, retryFailed bo
 			WHERE d.person_id = p.id AND d.device_id = $1 AND d.state = 'failed')`
 	}
 
-	rows, err := s.pool.Query(ctx, peopleToSyncSelect+condition+`
+	rows, err := s.pool.Query(ctx, peopleToSyncSelect+condition+personTypeFilter+`
 		ORDER BY p.id
-		LIMIT $2`, deviceID, limit)
+		LIMIT $2`, deviceID, limit, nilIfEmpty(personTypes))
 	if err != nil {
 		return nil, err
 	}
@@ -382,12 +390,25 @@ func (s *Store) PeopleToSync(ctx context.Context, deviceID int64, retryFailed bo
 	return scanSyncPeople(rows)
 }
 
+// nilIfEmpty — bo'sh ro'yxat SQL'da NULL bo'lib ketsin: `= ANY('{}')`
+// hech kimni tanlamaydi, NULL esa "filtr yo'q" degani.
+func nilIfEmpty[T any](in []T) []T {
+	if len(in) == 0 {
+		return nil
+	}
+	return in
+}
+
 // PeopleToSyncSelected — TANLANGAN odamlardan qurilmaga yuborilishi
 // mumkin bo'lganlari.
 //
 // `PeopleToSync` dan farqi: allaqachon yozilganlar ham qaytariladi. Odam
 // ataylab tanlangan ("shuni yubor") — u qurilmada bo'lsa yuzi qaytadan
-// yoziladi, bo'lmasa qo'shiladi. Yaroqlilik shartlari esa BIR XIL.
+// yoziladi, bo'lmasa qo'shiladi. Yaroqlilik shartlari esa BIR XIL, ya'ni
+// nofaol odam bu yerdan CHIQIB ketadi va `PeopleToRemove` uni terminaldan
+// olib tashlaydi.
+//
+// Tur filtri bu yerda yo'q: tanlov allaqachon bittalab qilingan.
 func (s *Store) PeopleToSyncSelected(ctx context.Context, deviceID int64, ids []int64) ([]Person, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -424,6 +445,48 @@ func (s *Store) SyncableIDs(ctx context.Context, ids []int64) ([]int64, error) {
 	}
 	defer rows.Close()
 
+	return scanIDs(rows)
+}
+
+// removablePerson — terminalda TURMASLIGI kerak bo'lgan odam sharti.
+//
+// `syncablePerson` ning aksi emas: rasmi yaroqsiz odam yozilmaydi, lekin
+// shu sababdan terminaldan CHIQARILMAYDI ham (`PeopleToRemove` izohi).
+const removablePerson = `(NOT p.is_active
+		       OR p.pending_delete
+		       OR (p.valid_to IS NOT NULL AND p.valid_to < CURRENT_DATE)
+		       OR ` + studentDuplicate + `)`
+
+// RemovableIDs — tanlanganlardan terminallardan olib tashlanishi kerak
+// bo'lganlari.
+//
+// `SyncableIDs` ning juftligi: panel "tanlanganlarning nechtasi yoziladi,
+// nechtasi o'chiriladi" deb ayta olsin. Qurilma ko'rsatilmaydi — odam
+// birortasida bo'lsa kifoya, qaysi qurilmada aynan nima bor-yo'g'ini sync
+// siklining o'zi hal qiladi.
+func (s *Store) RemovableIDs(ctx context.Context, ids []int64) ([]int64, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT p.id
+		FROM people p
+		JOIN device_person_sync d ON d.person_id = p.id
+		WHERE p.id = ANY($1)
+		  AND d.state <> 'removed'
+		  AND d.device_recno IS NOT NULL
+		  AND `+removablePerson+`
+		ORDER BY p.id`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanIDs(rows)
+}
+
+func scanIDs(rows pgx.Rows) ([]int64, error) {
 	var out []int64
 	for rows.Next() {
 		var id int64
@@ -480,7 +543,15 @@ type DeviceRemoval struct {
 // terminaldan chiqarib yubormasligi kerak — manbadagi rasm buzuq kelsa,
 // ishlab turgan xodim eshikdan qolib ketardi. Rasm o'zgarishi `MarkPhotoChanged`
 // orqali QAYTA YOZISH bilan hal qilinadi, o'chirish bilan emas.
-func (s *Store) PeopleToRemove(ctx context.Context, deviceID int64, limit int) ([]DeviceRemoval, error) {
+//
+// ⚠️ Odam TURI bo'yicha filtr bu yerda ATAYLAB qo'llanmaydi. Filtr faqat
+// "kimni yozamiz" degan tanlov: "faqat xodimlarni yubor" desa, terminalda
+// turgan talabalar o'chib ketmasligi kerak. Nofaol odam esa tanlangan
+// turdan qat'i nazar har qanday siklda olib tashlanadi.
+//
+// `personIDs` — faqat shu odamlar ko'rib chiqiladi (tanlab yuborish
+// sikli uchun); bo'sh bo'lsa qurilmadagi hamma yozuv tekshiriladi.
+func (s *Store) PeopleToRemove(ctx context.Context, deviceID int64, limit int, personIDs []int64) ([]DeviceRemoval, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT d.id, p.id, p.full_name, COALESCE(p.legacy_user_id, p.user_id), d.device_recno
 		FROM device_person_sync d
@@ -488,12 +559,10 @@ func (s *Store) PeopleToRemove(ctx context.Context, deviceID int64, limit int) (
 		WHERE d.device_id = $1
 			  AND d.state <> 'removed'
 			  AND d.device_recno IS NOT NULL
-		  AND (NOT p.is_active
-		       OR p.pending_delete
-		       OR (p.valid_to IS NOT NULL AND p.valid_to < CURRENT_DATE)
-		       OR `+studentDuplicate+`)
+		  AND ($3::bigint[] IS NULL OR p.id = ANY($3::bigint[]))
+		  AND `+removablePerson+`
 		ORDER BY d.id
-		LIMIT $2`, deviceID, limit)
+		LIMIT $2`, deviceID, limit, nilIfEmpty(personIDs))
 	if err != nil {
 		return nil, err
 	}
